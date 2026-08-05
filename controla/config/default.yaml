@@ -1,0 +1,260 @@
+# Controla — constantes de référence.
+#
+# Toutes les constantes [TUNE] de la spec §13 vivent ICI et nulle part ailleurs.
+# Un sweep = une copie de ce fichier avec quelques valeurs changées ; aucun nombre
+# magique ne doit apparaître dans le code.
+#
+# Les valeurs ci-dessous sont un POINT DE DÉPART plausible, pas un équilibre :
+# l'équilibre vient de la tranche 5 (build -> sweep -> ajuste), jamais de la spec.
+
+# ── Monde & partie ───────────────────────────────────────────────────────────
+world:
+  grid_size: 11          # [TUNE] calibré par sweep : premier contact vers T8.
+                         #   La spec suggérait [12,16], mais à 12 le contact tombe
+                         #   à T11.5 et à 14 il n'a jamais lieu — or §2 exige des
+                         #   contacts précoces pour que guerres et négociations
+                         #   aient lieu dans les 15 tours.
+  num_factions: 4
+  max_turns: 15          # [TUNE] premier bouton du sweep (cf. plan : 15 -> 30)
+  spawn_corner_size: 3   # côté du carré initial possédé par chaque faction
+
+  # Fréquences de terrain visées sur la carte. Le générateur les respecte
+  # exactement dans chaque quadrant (départs strictement symétriques, §2).
+  terrain_mix:
+    plain: 0.45
+    river: 0.20
+    forest: 0.35
+
+# ── Stocks & stats de départ (identiques pour les 4, §2) ─────────────────────
+start:
+  population: 20
+  food: 30
+  wood: 15
+  metal: 0
+  research: 0.0
+
+# ── Production ───────────────────────────────────────────────────────────────
+production:
+  noise_sigma: 0.10      # [TUNE] aléa gaussien multiplicatif par case
+  metal_per_tile: 0.35   # [TUNE] métal/tour/case une fois le palier 1 atteint
+  city_multiplier: 1.6   # [TUNE] rendement d'une case portant une ville
+  field_food_bonus: 1.5  # [TUNE] rendement d'une case portant des champs
+  worker_weight: 0.60    # [TUNE] 1 pt de Travailleur multiplie la production
+
+  # Spécialisation stricte des terrains (§2). Le métal n'est produit par AUCUN
+  # terrain : il vient du palier de recherche 1 (metal_per_tile ci-dessus).
+  terrain_yields:
+    plain:  {food: 1.6, wood: 0.0}
+    river:  {food: 2.6, wood: 0.0}
+    forest: {food: 0.3, wood: 1.8}
+
+# ── Consommation & population ────────────────────────────────────────────────
+consumption:
+  food_per_capita: 0.55      # [TUNE] base, avant modulation par Résilient
+  resilient_weight: 0.30     # [TUNE] 1 pt de Résilient réduit la conso de ce facteur
+
+population:
+  growth_rate: 0.35          # [TUNE] r de la croissance logistique
+  carrying_base: 12.0        # [TUNE] K plancher, hors nourriture/villes
+  carrying_per_food: 1.6     # [TUNE] contribution de la production de nourriture à K
+  carrying_per_city: 14.0    # [TUNE] contribution d'une ville à K
+  fertility_weight: 0.45     # [TUNE] 1 pt de Fertilité multiplie r de ce facteur
+  starvation_death_rate: 0.18  # [TUNE] fraction perdue/tour sous déficit total
+
+# ── Recherche ────────────────────────────────────────────────────────────────
+research:
+  per_lab: 1.0               # [TUNE] points/tour/laboratoire
+  base_rate: 0.35            # [TUNE] points/tour sans laboratoire
+  intelligence_weight: 0.60  # [TUNE] 1 pt d'Intelligence multiplie le gain
+  tiers: [4.0, 10.0, 18.0]   # [TUNE] seuils cumulés des paliers 1, 2, 3
+  tier2_food_bonus: 0.25     # palier 2 : +25 % de production de nourriture
+  tier3_consumption_cut: 0.15  # palier 3 : -15 % de consommation
+
+# ── Force militaire (§3, corrigée : termes technologiques saturants) ─────────
+force:
+  base: 0.40                 # [TUNE] > 0 : tout peuple se défend un minimum
+  warrior_weight: 0.50       # [TUNE] w_g
+  metal_weight: 0.45         # [TUNE] beta — plafond de l'apport métal
+  metal_halflife: 40.0       # [TUNE] m0 : métal donnant la moitié de beta
+  camp_weight: 0.40          # [TUNE] gamma — plafond de l'apport camps
+  camp_halflife: 2.5         # [TUNE] c0 : nb de camps donnant la moitié de gamma
+  engaged_min: 0.20          # [TUNE] rho_min : fraction engagée d'un peuple modéré
+  engaged_max: 0.85          # [TUNE] rho_max : fraction engagée d'un peuple guerrier
+
+# ── Traits (§4) ──────────────────────────────────────────────────────────────
+traits:
+  min: -0.50                 # [TUNE] borne basse (-50 %)
+  max: 1.50                  # [TUNE] borne haute (+150 %)
+  drift_rate: 0.18           # [TUNE] learning_rate de la dérive sous pression
+  drift_noise_sigma: 0.03    # [TUNE] petit bruit de la dérive
+  # Un Appel déplace le trait d'une fraction de la MARGE RESTANTE jusqu'à la borne
+  # -> saturation automatique dans les deux sens : plus un trait est haut, moins un
+  # Appel le fait monter (§4). Empêche le runaway ET rend le spam d'une seule action
+  # inefficace, donc force la diversification.
+  #   amount > 0 : trait += amount * call_step    * (max - trait)
+  #   amount < 0 : trait += amount * call_penalty * (trait - min)
+  call_step: 0.18            # [TUNE] pas d'un Appel d'intensité 1
+  call_penalty: 0.12         # [TUNE] amplitude des effets secondaires d'un Appel
+
+# ── Envies & comportements émergents (§5) ────────────────────────────────────
+emergence:
+  ema_alpha: 0.45            # [TUNE] alpha du lissage EMA — bouton réactif <-> stable
+  softmax_temperature: 0.35  # [TUNE] arbitrage entre envies concurrentes
+  threshold_sigma: 0.12      # [TUNE] sigma du bruit sur les seuils de déclenchement
+  expansion_threshold: 0.45  # [TUNE] seuil d'envie d'expansion
+  expansion_pop_weight: 0.030   # [TUNE] contribution de la population à l'envie
+  expansion_density_weight: 0.55  # [TUNE] contribution de la densité de bâtiments
+  war_threshold: 0.80        # [TUNE] seuil d'envie de guerre
+  war_call_boost: 0.55       # [TUNE] apport d'un Appel à la guerre à l'envie
+  war_decay: 0.55            # [TUNE] fraction d'envie de guerre conservée par tour
+
+# ── Commerce (§6) ────────────────────────────────────────────────────────────
+trade:
+  threshold: 0.50            # [TUNE] relation commerciale au-delà de laquelle les
+                             #   échanges automatiques se déclenchent
+  call_boost: 0.30           # [TUNE] apport d'un Appel au commerce
+  embargo_drop: 0.80         # [TUNE] chute de relation infligée par un embargo
+  decay: 0.90               # [TUNE] fraction de relation conservée par tour
+  fraction: 0.20             # [TUNE] part de l'abondance cédée par échange
+
+# ── Points d'intervention (§6, corrigés : log + plafond) ────────────────────
+intervention:
+  base: 2.0                  # [TUNE] plancher, même pour un peuple minuscule
+  pop_weight: 1.10           # [TUNE] coefficient de log(1 + population)
+  tile_weight: 0.10          # [TUNE] par case possédée
+  city_weight: 0.55          # [TUNE] par ville
+  cap: 9                     # [TUNE] plafond dur — garde-fou anti-snowball
+  # Nombre maximum de coups soumis par tour et par dieu. Les points d'intervention
+  # bornent déjà les actions PAYANTES ; ce plafond borne aussi les coups invalides
+  # (qui ne coûtent rien) et garantit donc la terminaison du tour.
+  max_submissions_per_turn: 16
+
+  # Coût de chaque action du dieu, en points d'intervention. >= 1 partout : toute
+  # action a un coût d'opportunité réel (§6). Ces clés SONT la liste des actions
+  # du catalogue — en ajouter une ici et dans registry/catalog.py suffit à la voir
+  # apparaître dans le prompt et dans le masque d'actions légales.
+  action_costs:
+    call_to_arms: 2
+    call_to_moderation: 2
+    call_to_reflection: 2
+    call_to_war: 3
+    call_to_trade: 1
+    trade_embargo: 2
+    blessing: 2
+    disaster: 3
+    omniscience: 2
+    negotiate: 1
+
+# ── Combat (§9) ──────────────────────────────────────────────────────────────
+combat:
+  decisiveness: 2.5          # [TUNE, m >= 2] curseur chance <-> skill
+  surprise: 1.35             # [TUNE 1.2-1.5] s, appliqué SI l'attaque n'est pas détectée
+  march_turns: 1             # latence : attaque au tour T -> résolue à T+1
+  attrition_winner: 0.15     # [TUNE] tau_g de base (victoire écrasante)
+  attrition_loser: 0.45      # [TUNE] tau_p de base
+  attrition_ratio_weight: 0.55  # [TUNE] pondération : victoire de justesse = coûteuse
+  attrition_sigma: 0.06     # [TUNE] sigma des pertes
+  loot_fraction: 0.35       # [TUNE] part des stocks du vaincu, x marge de victoire
+
+# ── Aléa de la passe (§8.8) ─────────────────────────────────────────────────
+events:
+  disease_probability: 0.10      # [TUNE] natalité en baisse
+  disease_severity: 0.35         # [TUNE] fraction de r perdue
+  disaster_probability: 0.10     # [TUNE] catastrophe naturelle
+  disaster_severity: 0.25        # [TUNE] fraction des stocks perdue
+  discovery_probability: 0.12    # [TUNE] découverte / trésor
+  discovery_amount: 12.0         # [TUNE] ressources gagnées
+
+# ── Miracles ─────────────────────────────────────────────────────────────────
+miracles:
+  blessing_bonus: 0.70       # [TUNE] productivité d'une case bénie
+  blessing_duration: 3       # [TUNE] tours
+  disaster_malus: 0.60       # [TUNE] productivité d'une case frappée
+  disaster_duration: 3       # [TUNE] tours
+  omniscience_duration: 1    # [TUNE] tours de brouillard levé
+
+# ── Bâtiments (§5) ───────────────────────────────────────────────────────────
+# Un bloc par bâtiment, entièrement déclaratif. Formule d'envie générique :
+#   D     = max(0, (conso_lissée - prod_lissée) / conso_lissée)   sur `deficit_resource`
+#   E     = e_base + (1 - e_base) * D^criticality_k               e_base = plancher additif
+#   envie = E * (1 + somme des drivers) * s(count)                s = saturation_halflife
+# Déclenchement si envie > threshold + N(0, emergence.threshold_sigma).
+#
+# `criticality_k` <= 1 pour une ressource VITALE (réagir tôt : construire des
+# champs avant la famine, pas après), >= 2 pour du luxe.
+# `saturation_halflife: null` là où la boucle de déficit rend s(count) redondante
+# (les champs : bâtir -> prod monte -> D baisse -> l'envie retombe seule).
+# `drivers` accepte des clés de trait ET des clés de stat (population, tiles,
+# building_density) — ajouter un driver ne demande aucun code.
+buildings:
+  city:
+    wood_cost: 25
+    e_base: 0.30
+    deficit_resource: null
+    criticality_k: 1.0
+    saturation_halflife: 2.0
+    threshold: 0.62
+    drivers: {worker: 0.45, builder: 0.90, population: 0.012}
+  lab:
+    wood_cost: 15
+    e_base: 0.35
+    deficit_resource: null
+    criticality_k: 1.0
+    saturation_halflife: 1.5
+    threshold: 0.58
+    drivers: {builder: 0.60, intelligence: 1.00}
+  camp:
+    wood_cost: 12
+    e_base: 0.35
+    deficit_resource: null
+    criticality_k: 1.0
+    saturation_halflife: 1.5
+    threshold: 0.58
+    drivers: {builder: 0.60, warrior: 1.00}
+  field:
+    wood_cost: 8
+    e_base: 0.20
+    deficit_resource: food
+    criticality_k: 0.7
+    saturation_halflife: null
+    threshold: 0.45
+    drivers: {worker: 0.70}
+
+# ── Diplomatie (§7) ──────────────────────────────────────────────────────────
+diplomacy:
+  negotiation_response_delay: 1  # T : argumentaire, T+1 : réponse
+  econ_alliance_turns: 4         # [TUNE] N tours de transfert réciproque garanti
+  war_alliance_window: 1         # tolérance en tours sur « la même cible au même tour »
+
+# ── Score (§10) ──────────────────────────────────────────────────────────────
+score:
+  # [TUNE] multi-axes volontairement : plusieurs voies de victoire doivent rester
+  # viables. Les poids sont calibrés pour que les quatre axes pèsent d'un ordre de
+  # grandeur COMPARABLE en fin de partie — sinon l'axe le plus gros (la population,
+  # qui atteint ~120 quand le territoire plafonne à ~24) écrase les autres et il ne
+  # reste qu'une seule voie, donc plus d'intransitivité.
+  weights:
+    population: 0.25
+    tiles: 1.50
+    research: 1.00
+    buildings: 3.00
+
+# ── Inférence LLM ────────────────────────────────────────────────────────────
+# Défauts globaux, surchargeables par modèle dans policies/llm/models.yaml.
+# Bornent le coût et la latence (max_tokens, timeout) et cadrent la
+# reproductibilité (temperature, seed) — deux préoccupations de premier ordre
+# pour un benchmark équitable.
+llm:
+  temperature: 0.7      # > 0 pour que les répétitions varient réellement
+  max_tokens: 2048      # plafonne la réponse -> borne latence et coût
+  timeout: 90.0         # secondes par requête
+  seed: null            # déterminisme côté fournisseur, si supporté
+  max_retries: 2        # retries SDK sur erreurs transitoires (429 / 5xx)
+  plan_retries: 2       # relances APRÈS une sortie invalide, avec l'erreur précise
+  max_legal_listed: 60  # coups énumérés par famille dans le prompt (borne les tokens)
+
+# ── Reward (RL ; les policies LLM lisent le texte, pas ce signal) ────────────
+reward:
+  score_delta_scale: 0.02    # shaping potentiel-based sur delta-score
+  rank_bonus: [1.0, 0.3, -0.3, -1.0]  # terminal, par rang final
+  elimination_penalty: -1.0

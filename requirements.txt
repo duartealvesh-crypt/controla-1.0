@@ -1,0 +1,18 @@
+# Arène
+pettingzoo>=1.24
+gymnasium>=0.29
+
+# Benchmark
+openskill>=6
+
+# Policies LLM
+openai
+pyyaml
+python-dotenv
+
+# Restitution
+numpy
+matplotlib
+
+# Tests
+pytest

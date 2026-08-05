@@ -1,0 +1,26 @@
+# Registre des modèles assignables à un siège.
+#
+# Chaque entrée associe un nom de modèle (transmis tel quel à l'API) à :
+#   provider      → sert à lire {PROVIDER}_BASE_URL et {PROVIDER}_API_KEY dans
+#                   l'environnement (voir .env.example)
+#   tool_support  → true si le fournisseur gère le tool calling ; false bascule
+#                   sur le mode « schéma JSON annexé au message »
+#
+# Réglages d'inférence optionnels, par modèle (sinon les défauts de
+# config/default.yaml → llm) : temperature, max_tokens, timeout, seed, max_retries.
+
+llama-3.3-70b-versatile:
+  provider: groq
+  tool_support: true
+
+openai/gpt-oss-120b:
+  provider: groq
+  tool_support: true
+
+gpt-4o-mini:
+  provider: openai
+  tool_support: true
+
+claude-sonnet-4-6:
+  provider: anthropic
+  tool_support: true
