@@ -242,7 +242,14 @@ def resolve_battle(
         tile = state.grid.get(*target)
         if tile.owner == defender.id:
             tile.owner = attacker.id
-            tile.building = None          # la structure ne survit pas à la prise
+            # L'ouvrage change de mains au lieu d'être rasé. Le détruire faisait
+            # disparaître du plateau un tiers de ce que la conquête aurait dû
+            # rapporter, et sur l'axe même où le conquérant est en retard : prendre
+            # une case coûtait alors trois points de score à tout le monde.
+            if tile.building is not None and (
+                stream.random() >= float(cfg.combat.building_capture_chance)
+            ):
+                tile.building = None
             annexed = target
 
         share = float(cfg.combat.loot_fraction) * margin

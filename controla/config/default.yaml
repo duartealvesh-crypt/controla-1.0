@@ -131,7 +131,18 @@ emergence:
   # ne pouvait pas rivaliser avec 15 cases gratuites.
   #
   # Rendre le territoire RARE est ce qui redonne de la valeur à la conquête.
-  expansion_food_cost: 1.2      # [TUNE] nourriture par unité de coût
+  #
+  # 1.8 est le SEUL levier que le sweep de calibration ait trouvé qui déplace le
+  # critère (b) de §13. Six axes balayés sur 1 152 parties : cinq ne bougeaient la
+  # domination que de deux ou trois points, celui-ci de onze.
+  #   coût       0.8    1.2    1.8    2.4    3.0
+  #   domination 48 %   40 %   29 %   38 %   35 %
+  #   plancher    4 %    4 %   21 %   19 %   21 %
+  # C'est le plancher qui compte : à 1.2 le quatrième archétype gagnait 2 parties
+  # sur 48, à 1.8 il en gagne 10 — la répartition passe à 29/27/23/21 pour un idéal
+  # de 25 % chacun. Le mécanisme est direct : un technologue qui met tout dans la
+  # Recherche ne peut plus s'offrir de terres (19.1 cases → 13.9).
+  expansion_food_cost: 1.8      # [TUNE] nourriture par unité de coût
   expansion_cost_exponent: 1.0  # [TUNE] 1.0 = linéaire en territoire, 1.5 = punitif
   # [TUNE] seuil d'envie de guerre. Relevé de 0.80 : depuis que l'adjacence n'est
   # plus requise, la guerre est disponible en permanence et devenait l'état par
@@ -171,6 +182,13 @@ intervention:
     call_to_arms: 2
     call_to_moderation: 2
     call_to_reflection: 2
+    # [TUNE] MAINTENU à 3 après mesure. L'hypothèse était qu'à 3 points — l'action
+    # la plus chère du jeu, et la seule sans contrepartie économique — un archétype
+    # belliqueux étranglait son économie : 89 % de son budget divin y passait.
+    # Le baisser à 2 a fait l'inverse de ce qu'on attendait : les points rendus ont
+    # racheté de la guerre, pas de la croissance. Assauts 623 -> 940, taux de
+    # victoire 60 % -> 36 %, population finale 49 -> 20. Ce prix est un bouton de
+    # VOLUME de guerre, pas un bouton de trésorerie.
     call_to_war: 3
     call_to_trade: 1
     trade_embargo: 2
@@ -214,6 +232,35 @@ combat:
   # route technologique vers la Force. Le vaincu ne REGRESSE pas de palier :
   # on lui vole des travaux, il n'oublie pas ce qu'il a déjà bâti.
   research_loot_fraction: 0.40  # [TUNE] part de la recherche du vaincu
+  # Probabilité qu'un bâtiment SURVIVE à la prise de sa case et change de mains.
+  # À 0.0 (l'ancien comportement) la conquête le détruisait : ~120 bâtiments rayés
+  # de la carte sur 48 parties, soit ~7.4 points de score évaporés par partie au
+  # lieu d'être transférés — et précisément sur l'axe où le conquérant manquait.
+  #
+  # 0.35 est un optimum BALAYÉ, pas un choix d'intuition. Le bouton fait basculer la
+  # domination du technologue au conquérant, et le croisement est net :
+  #   chance   0.00   0.35   0.50   0.75   1.00
+  #   domin.    50 %   40 %   44 %   52 %   54 %
+  #   turtle   24 v   19 v   18 v   15 v   15 v
+  #   conquér. 11 v   18 v   21 v   25 v   26 v
+  # À 1.0 la conquête devient à son tour la stratégie dominante — on aurait remplacé
+  # un déséquilibre par un autre. Deux tiers des ouvrages brûlent donc encore.
+  building_capture_chance: 0.35  # [TUNE] 0.0 = destruction systématique
+
+# ── Critères de sortie de la calibration (§13) ───────────────────────────────
+# Ce ne sont pas des constantes de jeu : ce sont les SEUILS auxquels on déclare une
+# configuration calibrée. §13 énonce ses trois critères sans les chiffrer ; les
+# voici, à un seul endroit, pour que `cli sweep` rende un verdict et non un avis.
+calibration:
+  # (a) « les parties finissent près du tour 15 » : part des parties qui vont au bout.
+  min_horizon: 0.90
+  # (b) « aucune stratégie ne domine » : part de victoires du meilleur participant.
+  # L'idéal est 0.25 à quatre joueurs ; 0.35 laisse une marge à une spécialisation
+  # légitimement forte sans tolérer une stratégie qui écrase.
+  max_domination: 0.35
+  # (c) « le skill bat la chance » : écart d'ordinal exigé entre le meilleur
+  # participant et `random_legal`. Ne s'évalue que si le hasard est dans le panel.
+  min_skill_margin: 5.0
 
 # ── Aléa de la passe (§8.8) ─────────────────────────────────────────────────
 events:

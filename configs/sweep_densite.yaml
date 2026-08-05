@@ -1,0 +1,23 @@
+# Troisième passage : récupérer la densité de carte que la rareté a fait perdre.
+#
+# Rendre l'expansion chère équilibre le panel (domination 40 % → 29 %) mais laisse
+# 47 cases sur 121 inoccupées, contre 31 avant. Or §2 veut une carte encombrée et
+# des contacts précoces — c'est déjà pour cela que `grid_size` avait été ramené de
+# 14 à 11. Le `baseline` fixe donc la rareté et l'on balaie la taille.
+#
+#   python -m controla.cli sweep configs/sweep_densite.yaml
+
+name: densite
+mode: axis
+seeds: {from: 1, to: 12}
+rotations: 0
+
+baseline:
+  emergence.expansion_food_cost: 1.8
+
+panels:
+  militaire: [cooperator, conqueror, expansionist, turtle]
+  reference: [cooperator, betrayer, expansionist, turtle]
+
+axes:
+  world.grid_size: [9, 10, 12]

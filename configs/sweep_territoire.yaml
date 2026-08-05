@@ -1,0 +1,23 @@
+# Second passage, ciblé : le sweep large a désigné un seul levier efficace.
+#
+# `emergence.expansion_food_cost` déplace la domination de façon monotone —
+# 0.8 → 48 %, 1.2 → 40 %, 1.8 → 29 % — là où les cinq autres axes balayés ne la
+# bougeaient que de deux ou trois points. Reste à trouver où la courbe s'arrête, et
+# à vérifier que le territoire ne meurt pas au passage.
+#
+#   python -m controla.cli sweep configs/sweep_territoire.yaml
+
+name: territoire
+mode: axis
+seeds: {from: 1, to: 12}
+rotations: 0
+
+panels:
+  militaire: [cooperator, conqueror, expansionist, turtle]
+  reference: [cooperator, betrayer, expansionist, turtle]
+
+axes:
+  emergence.expansion_food_cost: [1.8, 2.4, 3.0]
+  # Le coût est `food × (cases ^ exposant)`. Un exposant > 1 punit les grands
+  # empires plus que proportionnellement : autre forme de la même rareté.
+  emergence.expansion_cost_exponent: [1.25]

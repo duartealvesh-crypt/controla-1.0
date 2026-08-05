@@ -95,6 +95,23 @@ def _deep_merge(base: dict, overrides: Mapping, path: str = "") -> dict:
     return out
 
 
+def explode_dotted(flat: Mapping[str, Any]) -> dict:
+    """`{"combat.attrition_loser": 0.2}` → `{"combat": {"attrition_loser": 0.2}}`.
+
+    Les fichiers de sweep désignent une constante par son chemin complet — c'est
+    la seule écriture lisible dans un tableau de variantes. La validation, elle,
+    reste celle de `_deep_merge` : un chemin inconnu lève.
+    """
+    nested: dict = {}
+    for dotted, value in flat.items():
+        cursor = nested
+        *parents, leaf = str(dotted).split(".")
+        for part in parents:
+            cursor = cursor.setdefault(part, {})
+        cursor[leaf] = value
+    return nested
+
+
 def load_config(
     path: Path | str | None = None,
     overrides: Mapping[str, Any] | None = None,

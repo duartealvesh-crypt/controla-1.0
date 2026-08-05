@@ -1,0 +1,37 @@
+# Plan de calibration : le critère (b) de §13, « aucune stratégie ne domine ».
+#
+# C'est le seul des trois critères encore manqué. Mesuré au tournoi à rotations :
+# domination 40 % sur le panel militaire, 58 % sur le panel de référence, pour un
+# idéal de 25 % à quatre joueurs.
+#
+#   python -m controla.cli sweep configs/sweep_balance.yaml --dry-run
+#   python -m controla.cli sweep configs/sweep_balance.yaml
+#
+# Mode `axis` : un levier à la fois, chacun comparé à la référence. C'est ce qui
+# permet d'ATTRIBUER un effet à une cause — un produit cartésien ne le permet pas.
+
+name: equilibre
+mode: axis
+seeds: {from: 1, to: 12}
+rotations: 0            # 0 = toutes : chaque participant joue chaque coin
+
+panels:
+  # Le panel militaire oppose les deux trajectoires gagnantes connues.
+  militaire: [cooperator, conqueror, expansionist, turtle]
+  # Le panel plancher évalue le critère (c) : `random_legal` y sert d'étalon.
+  plancher:  [turtle, conqueror, random_legal, noop]
+
+axes:
+  # La voie technologique reste la plus forte : ces deux boutons la bornent.
+  research.slowdown_knee: [6.0, 10.0, 16.0]
+  score.weights.research: [7.0, 10.0]
+
+  # La voie militaire : ce qu'une défaite coûte, et ce qu'une prise rapporte.
+  combat.attrition_loser: [0.20, 0.28, 0.36]
+  combat.building_capture_chance: [0.20, 0.35, 0.50]
+
+  # Le volume de guerre, mesuré quasi linéaire en ce seuil.
+  emergence.war_threshold: [1.20, 1.60, 2.00]
+
+  # La rareté du territoire, qui commande l'écart de cases entre voies.
+  emergence.expansion_food_cost: [0.8, 1.2, 1.8]

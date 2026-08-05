@@ -46,12 +46,16 @@ class Archetype:
     temperature: float = 0.35
 
 
+# La **malédiction** hérite de la position déclarée sur l'**embargo** : les deux
+# consistent à nuire à autrui sans lui faire la guerre. Les deux clés restent
+# séparées — un mod peut vouloir un saboteur qui commerce — mais c'est de là que
+# viennent les valeurs initiales, et non d'une intuition.
 ARCHETYPES: dict[str, Archetype] = {
     "cooperator": Archetype(
         name="cooperator",
         kind_weights={"diplomacy": 2.5, "influence": 1.0, "miracle": 1.2},
         effect_weights={"trade_relation": 2.0, "embargo": -0.9, "war_desire": -0.9,
-                        "tile_modifier": 0.5},
+                        "tile_modifier": 0.5, "curse": -0.9},
         trait_weights={"resilient": 0.6, "worker": 0.6, "intelligence": 0.4},
         commitment_rate=0.8, honour_rate=1.0,
         commitment_kinds={"war_alliance": 0.05, "econ_alliance": 1.0},
@@ -62,7 +66,7 @@ ARCHETYPES: dict[str, Archetype] = {
         # trahison mesurable : il s'engage, puis ne paie pas l'action promise.
         kind_weights={"diplomacy": 2.5, "influence": 1.4, "miracle": 1.2},
         effect_weights={"trade_relation": 1.0, "embargo": 1.2, "war_desire": 1.5,
-                        "tile_modifier": 0.8},
+                        "tile_modifier": 0.8, "curse": 1.2},
         trait_weights={"warrior": 1.0},
         commitment_rate=0.8, honour_rate=0.0,
         commitment_kinds={"war_alliance": 1.0, "econ_alliance": 1.0},
@@ -75,7 +79,7 @@ ARCHETYPES: dict[str, Archetype] = {
         # belligérance ou de son coût social. Ici, seule la conquête est testée.
         kind_weights={"influence": 1.8, "miracle": 1.2, "diplomacy": 1.0},
         effect_weights={"war_desire": 2.0, "embargo": -1.0, "trade_relation": 0.4,
-                        "tile_modifier": 0.6},
+                        "tile_modifier": 0.6, "curse": -1.0},
         trait_weights={"warrior": 1.5, "worker": 0.4},
         commitment_rate=0.7, honour_rate=1.0,
         # Il tient ses pactes de guerre parce qu'il appelle à la guerre de toute
@@ -85,7 +89,8 @@ ARCHETYPES: dict[str, Archetype] = {
     "tit_for_tat": Archetype(
         name="tit_for_tat",
         kind_weights={"diplomacy": 2.0, "influence": 1.2, "miracle": 1.0},
-        effect_weights={"trade_relation": 1.5, "embargo": -0.5, "war_desire": 0.8},
+        effect_weights={"trade_relation": 1.5, "embargo": -0.5, "war_desire": 0.8,
+                        "curse": -0.5},
         trait_weights={"resilient": 0.4, "warrior": 0.4},
         target_rule="retaliate",
         commitment_rate=0.6, honour_rate=1.0,
@@ -94,7 +99,8 @@ ARCHETYPES: dict[str, Archetype] = {
     "expansionist": Archetype(
         name="expansionist",
         kind_weights={"miracle": 2.0, "influence": 1.5, "diplomacy": 0.4},
-        effect_weights={"tile_modifier": 1.5, "trade_relation": 0.3, "embargo": -0.3},
+        effect_weights={"tile_modifier": 1.5, "trade_relation": 0.3, "embargo": -0.3,
+                        "curse": -0.3},
         trait_weights={"worker": 1.2, "builder": 1.0, "fertility": 0.8},
         commitment_rate=0.2, honour_rate=1.0,
         commitment_kinds={"war_alliance": 0.2, "econ_alliance": 1.0},
@@ -102,7 +108,8 @@ ARCHETYPES: dict[str, Archetype] = {
     "coalition_builder": Archetype(
         name="coalition_builder",
         kind_weights={"diplomacy": 2.5, "influence": 1.5},
-        effect_weights={"trade_relation": 1.5, "embargo": 0.6, "war_desire": 1.2},
+        effect_weights={"trade_relation": 1.5, "embargo": 0.6, "war_desire": 1.2,
+                        "curse": 0.6},
         trait_weights={"intelligence": 0.6},
         target_rule="leader",
         commitment_rate=0.9, honour_rate=0.9,
@@ -113,7 +120,7 @@ ARCHETYPES: dict[str, Archetype] = {
         # Le contre de l'agression : tech et résilience, aucune envie de guerre.
         kind_weights={"influence": 2.0, "miracle": 1.0, "diplomacy": 0.8},
         effect_weights={"war_desire": -1.0, "embargo": -0.8, "trade_relation": 0.8,
-                        "tile_modifier": 0.6},
+                        "tile_modifier": 0.6, "curse": -0.8},
         trait_weights={"intelligence": 1.4, "resilient": 1.2, "worker": 0.8},
         commitment_rate=0.3, honour_rate=1.0,
         commitment_kinds={"war_alliance": 0.02, "econ_alliance": 1.0},
@@ -153,9 +160,19 @@ class ScriptedPolicy(Policy):
         deux portent un effet `trade_relation`, l'un pour l'ouvrir, l'autre pour le
         couper. Un coopérateur les aimerait autant — ce qui viderait de son sens la
         distinction que le benchmark cherche justement à mesurer.
+
+        Le même piège valait pour les miracles, et il avait été manqué : bénédiction
+        et malédiction portent toutes deux un `tile_modifier`, l'une pour enrichir sa
+        propre case, l'autre pour ruiner celle d'un rival. Mesuré sur 48 parties, le
+        coopérateur — pourtant déclaré `war_desire −0.9` et `embargo −0.9` — lançait
+        219 malédictions, soit 12 % de son budget divin passé à nuire, faute de
+        pouvoir dire qu'il ne le voulait pas.
         """
-        if effect.kind == "trade_relation" and effect.amount < 0:
-            return "embargo"
+        if effect.amount < 0:
+            if effect.kind == "trade_relation":
+                return "embargo"
+            if effect.kind == "tile_modifier":
+                return "curse"
         return effect.kind
 
     def _score(self, entry: dict, view: dict) -> float:
@@ -166,8 +183,18 @@ class ScriptedPolicy(Policy):
         for effect in spec.effects:
             key = self._effect_key(effect)
             score *= max(0.05, 1.0 + profile.effect_weights.get(key, 0.0))
-            if effect.kind == "trait_call" and effect.amount > 0:
-                score *= max(0.05, 1.0 + profile.trait_weights.get(effect.trait, 0.0))
+            if effect.kind == "trait_call":
+                # Un Appel monte un trait ET en baisse un autre — l'Appel aux armes
+                # donne +2 Guerrier pour −1 Résilience. Ne lire que le versant
+                # positif rendait l'archétype aveugle à ce qu'il sacrifie : un
+                # technologue ne voyait pas qu'il brade sa Résilience, un conquérant
+                # pas qu'un Appel à la modération lui coûte son trait Guerrier.
+                # Perdre ce à quoi l'on tient doit décourager autant que le gagner
+                # attire.
+                weight = profile.trait_weights.get(effect.trait, 0.0)
+                score *= max(
+                    0.05, 1.0 + (weight if effect.amount > 0 else -weight)
+                )
 
         return (
             score

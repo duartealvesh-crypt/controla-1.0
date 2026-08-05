@@ -5,6 +5,12 @@ pas une intuition — §13 interdit explicitement de calibrer à l'intuition.
 
 Ce document est l'ordre de mission de la tranche 5 (sweep).
 
+> **Correction, tranche 4.** Tous les taux de **domination** publiés avant la
+> tranche 4 sont faux : le banc de mesure ne faisait pas tourner les positions.
+> Les chiffres corrigés sont au constat n° 11, et la domination réelle est de
+> **65 %**, non de 33 %. Les autres mesures (rangs, populations, cases, batailles,
+> parole) ne sont pas affectées.
+
 ---
 
 ## T1 — mesures sur 24 parties scriptées (8 seeds × 3 permutations)
@@ -497,3 +503,597 @@ théorique de 25 % à quatre joueurs.
 **Aucun poids de score n'a été touché.** Corriger la mécanique valait mieux que
 compenser dans la mesure : les poids `case 4.5 / pop 0.12 / rech 7` deviennent
 inutiles, et le score reste multi-axes comme §10 l'exige.
+
+> Les taux de domination de cette section sont **invalidés** par le constat n° 11.
+> Les rangs, populations et cases restent valables.
+
+---
+
+## T4 — le banc de mesure, et ce qu'il a immédiatement trouvé
+
+Trois campagnes de 48 parties (12 seeds × 4 rotations de sièges), archétypes
+scriptés, dans `runs/t4-reference`, `runs/t4-military` et `runs/t4-floor`.
+
+### 11. Toutes les mesures de domination antérieures étaient faussées par la position
+
+Le banc ad hoc utilisé pendant l'équilibrage tirait ses permutations de sièges avec
+`itertools.permutations(range(4))[:3]`, soit `(0,1,2,3)`, `(0,1,3,2)`, `(0,2,1,3)`.
+Ces trois-là **laissent le premier archétype dans le coin 0 à chaque fois**, et le
+deuxième dans le coin 1 deux fois sur trois. La mesure comparait donc des
+archétypes *et* des positions.
+
+Même panel, mêmes seeds, seule la façon de tourner les sièges change :
+
+| Plan de mesure | Parties | Domination | Répartition |
+|---|---|---|---|
+| seeds 0-7 × 3 permutations lexicographiques | 24 | **33 %** | 6 / 3 / 8 / 7 |
+| seeds 0-7 × 3 rotations | 24 | **54 %** | 3 / 3 / 5 / 13 |
+| seeds 1-8 × 4 rotations | 32 | **62 %** | 3 / 3 / 6 / 20 |
+| seeds 1-12 × 4 rotations | 48 | **65 %** | 3 / 3 / 11 / 31 |
+
+Le « meilleur résultat obtenu, 33 % » était un artefact. Le tournoi fait désormais
+jouer à chaque participant **chaque coin exactement une fois par seed**, et c'est
+non négociable : sans rotation, le classement mesure en partie la position.
+
+**Conséquence : le critère (b) de §13 n'est pas atteint.** `turtle` domine à 65 %
+pour un idéal de 25 %. La voie technologique reste la stratégie forte, et tout
+l'équilibrage de la guerre n'a pas suffi.
+
+Classement de référence (`μ − 3σ`, 48 parties) :
+
+| | μ−3σ | μ | σ | Victoires | Rang moyen |
+|---|---|---|---|---|---|
+| turtle | **29.75** | 43.77 | 4.67 | 31 | 0.50 |
+| expansionist | 17.06 | 29.93 | 4.29 | 11 | 1.23 |
+| cooperator | 11.14 | 23.88 | 4.25 | 3 | 1.65 |
+| betrayer | −13.05 | 1.93 | 5.00 | 3 | 2.62 |
+
+Panel militaire, mêmes conditions : `turtle` 23 victoires, `conqueror` **12** — mais
+le `conqueror` finit dernier au classement OpenSkill malgré ses victoires, avec le
+même rang moyen que le `cooperator` (1.88) pour trois fois plus de victoires. C'est
+un profil **à forte variance** : il gagne ou il s'effondre, et Plackett-Luce le
+sanctionne. Une information que le simple décompte de victoires ne donnait pas.
+
+### 12. Le classement sépare le skill, la chance et l'absence
+
+Panel plancher (`turtle` / `cooperator` / `random_legal` / `noop`), 48 parties :
+
+| | μ−3σ | Victoires | focus | engagement |
+|---|---|---|---|---|
+| turtle | **35.49** | 35 | 0.83 | 4.14 |
+| cooperator | 25.13 | 13 | 0.49 | 4.75 |
+| random_legal | 1.53 | **0** | 0.29 | 3.49 |
+| noop | −18.22 | **0** | — | 0.00 |
+
+C'est le critère (c) de §13, et il est **atteint** : le hasard ne gagne jamais, et
+l'absence est loin derrière le hasard. Le levier divin existe donc bien — un dieu
+actif bat un dieu absent, ce qui est la condition pour que le benchmark compare des
+modèles et non des économies.
+
+La cohérence discrimine aussi comme voulu : 0.83 pour un archétype qui poursuit une
+ligne, 0.29 pour un tirage uniforme. Et `noop` n'obtient **aucun** score
+d'exactitude au lieu d'un 1.00 flatteur — le piège du modèle muet est bien évité.
+
+### 13. La faction 0 colonise en premier, donc elle finit la plus exposée
+
+Panel militaire, où le `conqueror` est le **seul** attaquant des 633 batailles : le
+coin 0 tombe à 74 % des assauts subis contre 46 % pour le coin 1, à volume d'agression
+égal (157 contre 155).
+
+Il a fallu trois vérifications pour savoir ce que ce chiffre dit vraiment.
+
+**1. La rotation est bien équilibrée** — vérifié dans les données, pas seulement dans
+le plan : chaque coin héberge chaque archétype exactement 12 fois sur 48 parties, et
+la matrice des assauts par couple (attaquant, défenseur) est plate à ±15 %.
+
+**2. Le premier calcul de significativité était faux.** J'avais annoncé 7 σ en
+traitant chaque assaut comme un tirage indépendant. Ils ne le sont pas du tout : un
+`conqueror` qui prend l'ascendant enchaîne quinze assauts victorieux dans la même
+partie. L'unité d'observation est la **partie**, pas l'assaut.
+
+| Coin | Taux de chute (moyenne des taux par partie) | Écart-type inter-parties |
+|---|---|---|
+| 0 | 73.8 % ± 4.8 | 28.8 % |
+| 1 | 50.3 % ± 6.4 | 38.2 % |
+| 2 | 48.4 % ± 5.5 | 33.2 % |
+| 3 | 65.0 % ± 6.3 | 37.5 % |
+
+Réel, mais à ~2.9 σ, pas 7.
+
+**3. Le contrôle décisif : des panels homogènes.** Quatre policies identiques, 40
+parties chacune — tout écart restant vient alors du moteur seul.
+
+| Panel | Victoires par coin | Rang moyen par coin |
+|---|---|---|
+| `turtle` × 4 | 9 / 9 / 9 / 13 | 1.62 / 1.50 / 1.38 / 1.50 |
+| `conqueror` × 4 | 8 / 13 / 10 / 9 | 1.70 / 1.32 / 1.70 / 1.27 |
+
+Dans le bruit. **Le coin n'est donc pas décisif en soi** — le constat initial était
+sur-lu.
+
+### Ce qui reste, et qui est réel
+
+Un petit biais mécanique, mesuré sur 96 parties du panel militaire :
+
+| Coin | Part de cases frontalières (fin de partie) | Distance moyenne au centre |
+|---|---|---|
+| **0** | **42.9 % ± 1.6** | **5.91 ± 0.05** |
+| 1 | 39.8 % ± 1.8 | 6.06 ± 0.04 |
+| 2 | 37.0 % ± 1.5 | 6.05 ± 0.04 |
+| 3 | 38.4 % ± 1.6 | 5.98 ± 0.06 |
+
+**Toutes les passes itèrent les factions par identifiant croissant.** La faction 0
+colonise donc la première, pousse le plus loin vers le centre disputé, et termine
+avec le territoire le plus **avancé** et le plus **frontalier** — 42.9 % de cases
+exposées contre 37.0 %.
+
+Six points d'exposition, c'est peu. Mais un agresseur choisit ses cibles : il frappe
+là où c'est ouvert, et convertit ce petit écart structurel en un grand écart de
+cases perdues. D'où 74 % contre 46 % en présence d'un `conqueror`, et rien du tout
+sans lui.
+
+La rotation moyenne ce biais entre participants, elle ne le supprime pas : elle
+ajoute de la variance, et elle n'est pas neutre quand un seul participant est en
+position de l'exploiter.
+
+**Correctif pour T5**, à un endroit : départager les revendications simultanées de
+cases par un tirage keyé `(seed, tour, "expansion")` plutôt que par l'ordre des
+identifiants. Même remarque pour l'ordre d'application à la barrière.
+
+### 14. La métrique de parole est diluée par un engagement qu'on tient sans rien faire
+
+Sur le panel de référence, 48 parties :
+
+| Archétype | Parole | Engagements | Tours honorés | Rompus |
+|---|---|---|---|---|
+| cooperator | **100 %** | 54 | 201 | 0 |
+| betrayer | **99 %** | 54 | 201 | 2 |
+| random_legal *(panel plancher)* | **97 %** | 39 | 144 | 4 |
+
+Un tirage uniforme obtient 97 % de parole. La métrique ne discrimine plus rien.
+
+La cause est structurelle : l'alliance **économique** est honorée par défaut, chaque
+tour, tant que personne ne pose d'embargo. Ne rien faire, c'est la tenir. Elle
+rapporte donc ~4 crédits de parole par engagement, et ces crédits gratuits noient
+les rares manquements sur les alliances de **guerre**, seules à exiger une action
+payée. C'est exactement l'inverse de ce que §7 veut mesurer.
+
+À noter aussi : 1 602 promesses envoyées pour 54 engagements formés — les
+archétypes saturent le canal de négociation, et une promesse coûte trop peu.
+
+Trois pistes pour T5 :
+1. Ne créditer une alliance économique qu'**à son échéance**, une fois, plutôt qu'à
+   chaque tour — une promesse tenue vaut alors une promesse, pas quatre.
+2. Pondérer les deux types : tenir un pacte de guerre demande une dépense, tenir un
+   pacte économique demande une abstention.
+3. Faire coûter la promesse (un point d'intervention par pledge), pour que
+   s'engager soit un arbitrage et non un réflexe.
+
+Le panel diplomatique de T3 discriminait, lui (`coalition_builder` à 44 %), parce
+qu'il promet des guerres sur une cible mouvante. Le défaut ne s'était donc pas vu.
+
+### 15. Pourquoi le `conqueror` perd : la décomposition complète
+
+48 parties du panel militaire. Score moyen et part de chaque axe :
+
+| Archétype | Population | Cases | Palier | Bâtiments | **Total** |
+|---|---|---|---|---|---|
+| turtle | 112.4 → 28.1 (25 %) | 19.3 → 28.9 (26 %) | 2.9 → 28.5 (26 %) | 8.5 → 25.4 (23 %) | **111.0** |
+| expansionist | 141.8 → 35.5 (35 %) | 20.9 → 31.3 (31 %) | 1.1 → 11.5 (11 %) | 7.7 → 23.1 (23 %) | **101.3** |
+| cooperator | 123.3 → 30.8 (33 %) | 20.2 → 30.3 (32 %) | 1.2 → 12.5 (13 %) | 6.7 → 20.2 (22 %) | **93.8** |
+| **conqueror** | 44.6 → 11.1 (13 %) | **29.0 → 43.5 (49 %)** | 1.7 → 17.1 (19 %) | 5.4 → 16.3 (19 %) | **88.1** |
+
+L'écart au `turtle` est de **22.9 points**, et il se décompose exactement :
+
+| Axe | Écart | |
+|---|---|---|
+| population | **−17.0** | il finit à 40 % de la population des autres |
+| palier de recherche | **−11.4** | 1.7 contre 2.9 |
+| bâtiments | **−9.1** | 5.4 contre 8.5 |
+| cases | **+14.6** | sa seule victoire, et elle est nette |
+
+#### La guerre consomme 89 % de son budget divin
+
+| Archétype | Actions payées | Points dépensés | Répertoire dominant |
+|---|---|---|---|
+| cooperator | 3 148 | 5 565 | `blessing` ×1955, `call_to_trade` ×885 |
+| expansionist | 3 011 | 5 623 | `blessing` ×2612 |
+| turtle | 2 948 | 5 526 | `call_to_reflection` ×2578 |
+| **conqueror** | **1 924** | 5 202 | `call_to_war` ×1542 (**89 % des points**) |
+
+`call_to_war` coûte **3 points, l'action la plus chère du jeu** (bénédiction 2,
+réflexion 2, commerce 1), et c'est la seule qui ne produit **rien** d'économique.
+À budget égal, le `conqueror` joue donc un tiers d'actions en moins que les autres —
+1 924 contre ~3 000 — et son retard de population est visible **dès le tour 3**
+(24 habitants contre 28 à 31), bien avant que la guerre ne coûte quoi que ce soit.
+
+Rendement comparé, en points d'intervention par point de score gagné :
+
+* `turtle` : 107 pts/partie → 28.5 de palier, soit **3.8 pts par point de score** ;
+* `conqueror` : 96 pts/partie de guerre → +13.5 de cases au-dessus du plancher,
+  soit **7.1 pts par point de score**. La guerre coûte **deux fois** la recherche.
+
+#### Ce sont ses défaites qui le saignent, plus ses victoires
+
+| | |
+|---|---|
+| Assauts lancés | 633 (13.2 par partie) |
+| Gagnés | 360 — **57 %** |
+| Morts à l'attaque | 4 431, soit **7.0 par assaut** |
+| Population finale | 44.6 |
+
+Le correctif d'attrition du vainqueur a bien pris : écraser ne coûte presque rien.
+Mais **43 % des assauts sont des défaites**, et une défaite coûte 29 à 43 % des
+engagés. Le `conqueror` tue donc deux fois sa propre population finale au cours
+d'une partie, et l'essentiel vient des batailles perdues. Spirale : moins de monde
+→ Force plus faible → plus de défaites → moins de monde.
+
+#### Prendre une case détruit son bâtiment
+
+`resolve_battle` pose `tile.building = None` à l'annexion. Sur 360 conquêtes et une
+densité de bâtiments d'environ un tiers des cases, ce sont **~120 bâtiments
+détruits** sur 48 parties — ~2.5 par partie, soit **7.4 points de score qui
+s'évaporent** au lieu de changer de mains. Or l'axe bâtiments est justement celui où
+le `conqueror` est en retard (5.4 contre 8.5).
+
+#### Les quatre leviers, par effet attendu
+
+1. **Baisser le prix de `call_to_war` de 3 à 2.** Une constante, et personne d'autre
+   dans le panel ne paie cette action. Rend ~30 % d'actions au `conqueror`, ce qui
+   attaque directement le trou de population *et* son retard de départ au tour 3.
+2. **Le bâtiment survit à la prise.** Convertit la conquête en points sur l'axe
+   exact où il manque. Vaut ~7.4 points par partie, soit un tiers de l'écart.
+3. **Baisser `attrition_loser` de 0.28 à ~0.20.** Cible ses 273 défaites, qui sont
+   la source principale de sa saignée. Le seul archétype qui perd des assauts en
+   tant qu'attaquant, c'est lui.
+4. **Baisser `score.weights.population` de 0.25 à 0.15** — efficace (+6.8 net pour
+   lui) mais c'est compenser dans la mesure au lieu de corriger la mécanique, le
+   même argument qui avait fait écarter `case 4.5 / pop 0.12 / rech 7`. Et les cases
+   pèsent déjà 49 % de son score.
+
+Les leviers 1 et 2 sont des corrections de mécanique et ne touchent aucun autre
+archétype ; le 3 rouvre l'arbitrage déjà mesuré entre volume et viabilité de la
+guerre (constat « étape 3 »).
+
+### 16. Les leviers 1 et 2 mis à l'épreuve : un rejeté, l'autre retenu à 0.35
+
+Les deux leviers isolés puis combinés, panel militaire, 12 seeds × 4 rotations :
+
+| Variante | Domination | `conqueror` | Population | Assauts | Gagnés |
+|---|---|---|---|---|---|
+| référence (3 pts, ouvrage rasé) | 50 % | rang 1.85, 11 v | 49.2 | 623 | 60 % |
+| **A** — guerre à 2 points | **56 %** | rang **2.38**, 7 v | **19.6** | 940 | **36 %** |
+| **B** — ouvrage capturé | 54 % | rang **1.10**, 26 v | 67.4 | 644 | 64 % |
+| A + B | 42 % | rang 1.60, 18 v | 32.0 | 950 | 43 % |
+
+#### A est rejeté : le prix de la guerre est un bouton de VOLUME
+
+Le raisonnement était qu'à 3 points — l'action la plus chère du jeu et la seule sans
+contrepartie économique — l'Appel à la guerre étranglait l'économie du belliqueux,
+qui y engloutissait 89 % de son budget.
+
+Rendre ces points **n'a pas acheté de la croissance, il a acheté plus de guerre.**
+Les actions passent de 1 924 à 2 685 et la totalité du surplus part en appels : 623
+assauts deviennent 940, le taux de victoire s'effondre de 60 % à 36 %, la population
+finale tombe de 49 à 20. La spirale s'accélère au lieu de se briser.
+
+**Ce prix pilote le volume d'agression, pas la trésorerie du dieu.** C'est un
+résultat général sur les archétypes scriptés : leur fonction de score ne réalloue
+pas un budget rendu, elle en rachète la même chose. Prix maintenu à 3.
+
+#### B est retenu, mais à 0.35 — à 1.0 il crée le déséquilibre inverse
+
+Balayage du nouveau bouton `combat.building_capture_chance`, prix maintenu à 3 :
+
+| chance | 0.00 | **0.35** | 0.50 | 0.75 | 1.00 |
+|---|---|---|---|---|---|
+| **Domination** | 50 % | **40 %** | 44 % | 52 % | 54 % |
+| `turtle` | 24 v | 19 v | 18 v | 15 v | 15 v |
+| `conqueror` | 11 v | 18 v | 21 v | 25 v | 26 v |
+| rang du `conqueror` | 1.85 | 1.48 | 1.35 | 1.23 | 1.10 |
+
+Le bouton fait basculer la domination du technologue au conquérant, et le
+croisement est net. **À 1.0, la conquête devient à son tour la stratégie
+dominante** (26 victoires sur 48) : on aurait remplacé un déséquilibre par un
+autre. Deux tiers des ouvrages brûlent donc encore.
+
+**Retenu : `call_to_war: 3` (inchangé), `building_capture_chance: 0.35`.**
+
+| Panel | Avant | Après |
+|---|---|---|
+| militaire | 50 % — `conqueror` **dernier** (rang 1.85) | **40 %** — `conqueror` **2ᵉ** (rang 1.48) |
+| référence | 65 % | 62 % |
+| plancher | 73 % | 73 % (personne n'y conquiert) |
+
+40 % est le meilleur taux de domination mesuré depuis le début sur un banc à
+rotations, pour un idéal de 25 %. Le panel de référence bouge à peine : le
+`betrayer` conquiert trop peu pour que la règle le concerne.
+
+Reste ouvert : le `cooperator` ne gagne plus que 2 parties sur 48 sur le panel
+militaire. Le plafond est mieux partagé, le plancher pas encore.
+
+### 17. Les archétypes étaient aveugles au signe de deux effets
+
+Trouvé en rédigeant le récapitulatif du panel, puis confirmé par un test.
+
+Un archétype pondère des **types d'effet**, jamais des noms d'action — c'est ce qui
+rend le panel moddable. Le piège de ce design est qu'un effet peut changer de *sens*
+selon son signe. `_effect_key` le corrigeait pour `trade_relation` (commerce ≠
+embargo), et le docstring expliquait pourquoi. Deux cas avaient été manqués.
+
+**La bénédiction et la malédiction portaient la même clé.** Toutes deux sont un
+`tile_modifier` : +0.70 sur sa propre case, −0.60 sur celle d'un rival. Le
+`cooperator` — déclaré `war_desire −0.9`, `embargo −0.9` — n'avait donc aucun moyen
+de dire qu'il ne maudissait pas : **219 malédictions sur 48 parties**, 12 % de son
+budget divin. L'`expansionist` n'y échappait que par accident, la bénédiction
+portant en plus un `trait_call(worker)` qu'il pondère assez haut pour que le softmax
+ne tire jamais l'autre.
+
+**Un Appel montait un trait et en baissait un autre, seul le versant positif était
+lu.** L'Appel aux armes donne +2 Guerrier pour −1 Résilience ; le `turtle`, qui tient
+à sa Résilience, ne voyait pas ce qu'il bradait, et le `conqueror` ne voyait pas
+qu'un Appel à la modération lui coûtait son trait Guerrier. Perdre ce à quoi l'on
+tient décourage désormais autant que le gagner attire.
+
+Valeurs initiales de la nouvelle clé `curse` : **la position déclarée sur
+l'embargo**, puisque les deux consistent à nuire sans faire la guerre. Ce n'est pas
+sept nombres inventés, c'est une stance déjà écrite qu'on recopie.
+
+#### Effet mesuré
+
+| | Avant | Après |
+|---|---|---|
+| Malédictions du `cooperator` | 219 | **0** |
+| Ses bénédictions | 1 955 | 2 237 |
+| Son score / sa population | 93.7 / 121.8 | 94.7 / 124.5 |
+| Ses victoires (panel militaire) | 2 | **2** |
+| Domination, panel militaire | 40 % | 40 % |
+| Domination, panel de référence | 62 % | **58 %** |
+
+**La prédiction était trop optimiste.** J'annonçais « 657 points d'intervention à
+réinvestir » ; ils sont bien réinvestis (+282 bénédictions, +81 appels au commerce)
+mais ne rapportent qu'un point de score. Les malédictions n'étaient donc pas si
+coûteuses : ce qu'elles gaspillaient, elles le reprenaient en partie aux rivaux. La
+correction vaut pour la **cohérence** du panel — un pacifiste qui maudit n'est pas
+un pacifiste — plus que pour l'équilibre.
+
+Le correctif du signe des traits n'a, lui, rien changé de mesurable : le `turtle`
+jouait déjà 0 Appel aux armes et le `conqueror` 0 Appel à la modération. Le défaut
+était latent, pas actif.
+
+#### Effet de bord révélateur : la malédiction est une action dominée
+
+Le `betrayer`, à qui la nouvelle clé donne enfin un appétit cohérent pour le
+sabotage (`curse: 1.2`), en lance **502 sur 48 parties** — et tombe de 4 victoires à
+**0**, ordinal −8.87 → −23.66.
+
+Maintenant qu'un archétype la veut vraiment, on voit qu'elle ne vaut rien :
+
+| | Bénédiction | Malédiction |
+|---|---|---|
+| Coût | 2 points | **3 points** |
+| Amplitude | +0.70 | **−0.60** |
+| Durée | 3 tours | 3 tours |
+| Bénéficiaire | soi, à coup sûr | **un rival sur trois** |
+
+Plus chère, plus faible, et son bénéfice est dilué entre trois adversaires dont un
+seul est frappé. À traiter en T5 : aligner le coût sur celui de la bénédiction, ou
+renforcer `miracles.disaster_malus`.
+
+---
+
+## T5 — la calibration, six axes balayés sur 2 016 parties
+
+`cli sweep` joue un plan de variantes en mode **un levier à la fois**, panel scripté,
+zéro appel LLM. Trois passages successifs, chacun décidé par le précédent.
+
+### 18. Un seul levier sur six déplace l'équilibre
+
+Premier passage : 6 axes, 12 variantes, 2 panels, **1 152 parties en 8 min 45**.
+
+| Axe balayé | Domination obtenue | Verdict |
+|---|---|---|
+| `research.slowdown_knee` 6 / 16 | 44 % / 38 % | ±2 pts — inerte |
+| `score.weights.research` 7 | 40 % | inerte |
+| `combat.attrition_loser` 0.20 / 0.36 | 40 % / 44 % | inerte |
+| `combat.building_capture_chance` 0.20 / 0.50 | 35 % / 44 % | ±5 pts |
+| `emergence.war_threshold` 1.2 / 2.0 | 42 % / 42 % | inerte |
+| **`emergence.expansion_food_cost` 0.8 / 1.8** | 48 % / **29 %** | **−11 pts** |
+
+Référence : 40 %. Cinq axes sur six ne bougent la domination que du bruit ; le sixième
+la déplace de onze points. Sans le sweep, j'aurais continué à tourner les boutons du
+combat — c'est là que j'avais passé tout l'équilibrage précédent, et ils ne servent à
+rien pour ce critère.
+
+### 19. Le vrai indicateur est le PLANCHER, pas la domination
+
+| `expansion_food_cost` | 0.8 | 1.2 | **1.8** | 2.4 | 3.0 |
+|---|---|---|---|---|---|
+| Domination (meilleur) | 48 % | 40 % | **29 %** | 38 % | 35 % |
+| **Plancher (pire)** | 4 % | 4 % | **21 %** | 19 % | 21 % |
+| Étalement | 0.74 | 0.87 | **0.99** | 0.97 | 0.98 |
+
+La domination plafonne dès 1.8 et le reste est du bruit. Ce qui change vraiment, c'est
+le plancher : **le quatrième archétype passe de 2 victoires sur 48 à 10.** La
+répartition devient 29 / 27 / 23 / 21 % pour un idéal de 25 % chacun.
+
+C'est exactement la distinction relevée plus haut : 40/38/19/4 et 40/20/20/20 ont la
+même domination et ne sont pas la même arène. `Criteria` émet donc les trois nombres —
+domination, plancher, étalement — et non le seul maximum.
+
+**Retenu : `expansion_food_cost: 1.2 → 1.8`.**
+
+Le mécanisme est direct : un technologue qui met tout dans la Recherche ne peut plus
+s'offrir de terres.
+
+| à 1.8 | Cases | Population | Palier | Score |
+|---|---|---|---|---|
+| cooperator | 20.3 → 17.2 | 124.5 → 127.5 | 1.31 → 1.35 | 94.7 → 92.6 |
+| conqueror | 29.8 → 24.6 | 55.5 → 53.0 | 1.98 → 1.92 | 102.5 → 92.7 |
+| expansionist | 20.8 → 17.9 | 139.2 → 141.5 | 1.15 → 1.27 | 99.9 → 98.3 |
+| **turtle** | 19.1 → **13.9** | 108.9 → 94.4 | 2.75 → 2.75 | 108.3 → 97.5 |
+
+L'écart de score entre le premier et le dernier tombe de 13.6 à 5.7 points.
+
+### 20. La taille de grille ne sert plus à rien — et une hypothèse de T1 est périmée
+
+Deuxième et troisième passages : `expansion_food_cost` 1.8 → 3.0, puis `grid_size`
+9 / 10 / 12 à rareté fixée.
+
+| Configuration | Domination militaire | Domination référence | Carte occupée |
+|---|---|---|---|
+| grille 11, coût 1.2 | 40 % | 58 % | 74 % |
+| **grille 11, coût 1.8** | **29 %** | 54 % | 61 % |
+| grille 10, coût 1.8 | 31 % | 50 % | 73 % |
+| grille 12, coût 1.8 | 29 % | 44 % | 52 % |
+
+Les écarts de grille valent 2 à 3 victoires sur 48 : du bruit. **Grille inchangée
+à 11** — la changer serait calibrer sur du bruit, ce que §13 interdit.
+
+En revanche une inquiétude s'est révélée infondée, et une hypothèse de T1 est morte :
+
+| | Batailles/partie | 1ʳᵉ bataille | Parties avec guerre |
+|---|---|---|---|
+| grille 11, coût 1.2 | 13.3 | **T4.4** | 48/48 |
+| grille 11, coût 1.8 | 12.4 | **T4.4** | 48/48 |
+| grille 12, coût 1.8 | 12.7 | **T4.4** | 48/48 |
+| grille 10, coût 1.8 | 12.7 | **T4.4** | 48/48 |
+
+Le volume de guerre est **totalement insensible** à la rareté comme à la taille de
+carte. Le constat n° 1 de T1 — « à 14, les factions ne se touchent jamais, la guerre
+est mécaniquement impossible » — n'est plus vrai : depuis que l'adjacence n'est plus
+requise pour attaquer, **le contact ne conditionne plus la guerre**. La première
+bataille tombe au tour 4.4 quelle que soit la grille.
+
+`grid_size: 11` reste donc un choix, pas une contrainte. La fourchette [12, 16] de §2
+redevient jouable si l'on veut une carte plus vaste.
+
+### 21. Les trois critères de §13 sont atteints — chacun sur le panel qui les mesure
+
+Config retenue, 48 parties par panel :
+
+| Panel | (a) horizon | (b) équilibre | (c) skill |
+|---|---|---|---|
+| **militaire** `cooperator/conqueror/expansionist/turtle` | OK | **OK** — 29 %, plancher 21 %, étalement 0.99 | — |
+| référence `cooperator/betrayer/expansionist/turtle` | OK | NON — 54 % | — |
+| plancher `turtle/conqueror/random_legal/noop` | OK | NON — 50 % | **OK** — 24.6 d'écart au hasard |
+
+Le panel militaire :
+
+| | μ−3σ | Victoires | Rang |
+|---|---|---|---|
+| expansionist | 18.37 | 11 | 1.23 |
+| turtle | 15.99 | 14 | 1.33 |
+| cooperator | 13.34 | 10 | 1.67 |
+| conqueror | 1.82 | 13 | 1.77 |
+
+**Le critère (b) ne doit pas être lu sur les deux autres panels, et ce n'est pas une
+excuse mais une propriété de leur composition.** Le panel plancher contient `noop` et
+`random_legal`, qui ne gagnent jamais par construction : la domination y est
+mécaniquement ≥ 50 %. Le panel de référence contient `betrayer`, un **témoin** —
+il embargote, rompt ses pactes et paie un coût social par conception, pour que la
+trahison soit mesurable. Il finit à 0 victoire sur 48 et à −21.6 d'ordinal.
+
+Chaque panel a une fonction : le **militaire** mesure l'équilibre (quatre voies
+viables), le **référence** mesure la parole (§7), le **plancher** mesure le levier
+divin (skill contre hasard). Les évaluer tous les trois sur les trois critères
+produit deux faux échecs.
+
+### Reste ouvert pour T6 et au-delà
+
+* La métrique de parole ne discrimine plus (constat n° 14) : l'alliance économique
+  est honorée par inaction, et un tirage uniforme obtient 97 %.
+* La malédiction est une action dominée (constat n° 17).
+* La faction 0 finit la plus exposée, les passes itérant par identifiant (constat n° 13).
+* Aucune élimination en 144 parties : la voie « éliminer un rival » est inerte à
+  15 tours.
+
+### 18. Punir le leader est jouable, efficace — et perdant
+
+Question posée avant de mesurer : maintenant qu'il existe deux trajectoires
+gagnantes, un dieu peut-il être amené à agresser celui qui gagne ? Trois conditions,
+mesurées séparément.
+
+#### a. Le vainqueur est-il identifiable ? Partiellement, et c'est voulu
+
+Ce qu'un dieu voit d'un rival : `tiles`, `buildings` (types compris),
+`at_war_with_me`, `trade_relation`, `reputation`. Ce qu'il **ne voit pas** :
+population, recherche, palier, Force. Or la moitié du score se joue sur les deux
+axes invisibles (population 25 %, palier 26 %).
+
+| Estimateur du leader | Panel militaire | Panel de référence |
+|---|---|---|
+| le plus de cases | **31 %** | 48 % |
+| cases + bâtiments | **73 %** | 79 % |
+
+Juger au territoire désigne le mauvais joueur deux fois sur trois. L'indice utile
+est la **composition** des bâtiments, qui est publique :
+
+| | camp | cité | champ | **labo** |
+|---|---|---|---|---|
+| cooperator | 0.98 | 2.56 | 2.23 | 0.92 |
+| **conqueror** | **2.08** | 2.56 | 2.29 | 1.10 |
+| expansionist | 0.92 | 2.94 | 2.83 | 0.83 |
+| **turtle** | 1.06 | 2.60 | 2.60 | **2.02** |
+
+Le technologue a deux fois plus de laboratoires que quiconque, le conquérant deux
+fois plus de camps. L'inférence est disponible, mais elle demande de lire une
+composition et non une taille.
+
+#### b. Est-il punissable ? Oui, sans investissement préalable
+
+Force en fin de partie, 48 parties :
+
+| | Force | Force engagée | trait Guerrier |
+|---|---|---|---|
+| cooperator | 129.3 | 69.5 | 0.53 |
+| conqueror | **106.0** | **82.6** | 1.28 |
+| expansionist | 137.0 | 72.8 | 0.51 |
+| turtle | 114.9 | 62.5 | 0.55 |
+
+Les Forces sont **quasi égales** : la population domine la formule et les apports
+technologiques saturent (écart assumé n° 1). Le conquérant a même la Force totale la
+plus faible — sa population s'est effondrée — et ne devance les autres qu'en *ardeur*.
+
+Conséquence : deux dieux pacifiques alignent ~140 de Force engagée contre 82.6, soit
+un ratio de 1.69 qui donne, au contest de Tullock à `m = 2.5`, **79 % de victoire**.
+Punir ne demande pas quinze tours de préparation militaire, seulement de décider
+d'employer la population qu'on a déjà.
+
+Le délai, en revanche, est serré : franchir `war_threshold` demande un ou deux tours
+d'Appels, la marche un ou deux de plus. Décider au tour 10, c'est frapper au tour 13
+— une ou deux frappes coordonnées par partie, pas davantage.
+
+#### c. Est-ce que ça paie ? Non — et c'est LE problème
+
+Deux panels, 48 parties chacun, les deux trajectoires gagnantes contre deux
+comportements passifs puis contre deux comportements réactifs (`coalition_builder`
+vise le plus gros territoire, `tit_for_tat` rend les coups).
+
+| | Contrôle (2 passifs) | Coalition (2 réactifs) |
+|---|---|---|
+| **Domination** | **42 %** | **73 %** |
+| `turtle` | 20 v — score 107.6 | **35 v** — score 107.8 |
+| `conqueror` | 18 v — score 102.4 | 8 v — score **70.3** |
+| les deux autres | 5 v / 5 v — score ~97 | 3 v / 2 v — score **~63** |
+
+Les réactifs ont bien coordonné leur agression : 472 assauts sur le conquérant
+contre 336 sur le technologue. Ils ont bien **réussi** — le conquérant tombe de
+102.4 à 70.3 et perd 10 victoires. Et ils ont **perdu** : scores 63.0 et 62.3, les
+deux plus bas du panel, taux de victoire au combat de 43 et 45 %.
+
+Le technologue, lui, n'a rien fait et passe de 20 à **35 victoires sur 48**.
+
+C'est le problème du **bien public** dans sa forme la plus nue : punir le leader
+coûte à celui qui punit et profite à celui qui s'abstient. Un modèle qui raisonne
+correctement finira donc par ne jamais frapper — et l'intransitivité que §12 exige
+n'existera pas.
+
+Le partage du butin de l'alliance de guerre (§7) est censé compenser ; mesuré, il
+n'y suffit pas. Pistes pour T5 :
+1. **Augmenter la prise sur le leader** — butin, recherche volée, ou ouvrages
+   capturés qui montent avec l'écart de score du vaincu.
+2. **Faire payer l'abstention** : une guerre qui dure devrait coûter à tous
+   (interruption du commerce, tension), pour que rester en dehors ne soit pas gratuit.
+3. **Rendre le palier de recherche visible** — l'invisibilité protège aujourd'hui
+   exactement la stratégie qui n'a pas besoin de protection.

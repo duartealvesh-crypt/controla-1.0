@@ -58,6 +58,34 @@ python -m controla.cli play --seed 42 --out runs/game.json --journal
 python -m controla.cli replay runs/game.json
 ```
 
+Une campagne classée : chaque participant joue **chaque coin exactement une fois par
+seed**, sans quoi le classement mesurerait en partie la position.
+
+```bash
+python -m controla.cli tournament --policies cooperator,betrayer,expansionist,turtle --seeds 1,2,3,4,5,6
+```
+
+Elle écrit un JSONL par partie et un `manifest.json` dans `runs/<horodatage>/`.
+Chaque partie s'y rejoue telle quelle :
+
+```bash
+python -m controla.cli replay runs/<run>/game_0000.jsonl
+```
+
+Calibrer — un levier de constante à la fois, panel scripté, **zéro appel LLM** :
+
+```bash
+python -m controla.cli sweep configs/sweep_balance.yaml --dry-run
+```
+
+```bash
+python -m controla.cli sweep configs/sweep_balance.yaml
+```
+
+Le `--dry-run` annonce le nombre de variantes et de parties avant de rien jouer. Un
+plan qui balaie un axe autour de sa valeur courante ne la rejoue pas : le
+dédoublonnage porte sur la configuration **résolue**, pas sur le dict d'overrides.
+
 ## Boucle de jeu
 
 ```
@@ -89,10 +117,11 @@ controla/
 ├── dynamics/         la passe : économie, émergence, militaire, dérive, score
 ├── actions/          index plat + masque (légalité) · exécution par descripteur
 ├── env/              ControlaEnv (AEC), observation avec brouillard, reward
-├── policies/         interface · archétypes scriptés · (LLM en tranche 2)
-├── arena/            play_match · (tournoi et OpenSkill en tranche 4)
-├── replay/           rendu texte d'un état et d'une partie
-└── cli.py            describe · play · replay
+├── policies/         interface · archétypes scriptés · policies LLM
+├── arena/            play_match · tournoi · OpenSkill · métriques · sweep · JSONL
+├── replay/           rendu texte d'un état, d'une partie, d'un classement, d'un sweep
+├── cli.py            describe · play · tournament · sweep · replay
+└── ../configs/       plans de calibration (§13)
 ```
 
 ### Moddable par construction
@@ -128,7 +157,7 @@ dieu ne change **rien** pour les autres.
 pytest
 ```
 
-222 tests, ~45 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
+272 tests, ~2 min. Le filet est conçu pour rester vert pendant l'équilibrage : les
 invariants sont indépendants des constantes, donc un sweep qui les casse a cassé le
 moteur et non l'équilibre.
 
@@ -142,6 +171,9 @@ moteur et non l'équilibre.
 | `test_world.py` | symétrie de rotation **exacte** du monde, distances BFS |
 | `test_llm_policy.py` | prompt dérivé du catalogue, validation, relances, métriques |
 | `test_diplomacy.py` | formation des engagements, vérification sur l'intention, réputation |
+| `test_arena.py` | JSONL relisible, ordinal `μ − 3σ`, rotation des sièges, campagne reproductible |
+| `test_archetypes.py` | le panel joue ce qu'il déclare : effets signés, zéro nom d'action en dur |
+| `test_sweep.py` | plan sans doublon, constante inconnue refusée, critères §13 chiffrés |
 
 ## État d'avancement
 
@@ -149,9 +181,38 @@ moteur et non l'équilibre.
 - [x] **T1** — simulation déterministe, sans LLM
 - [x] **T2** — policy LLM (structured output, retries, taux d'action invalide)
 - [x] **T3** — négociation, engagements, réputation publique
-- [ ] **T4** — tournoi, OpenSkill, métriques
-- [ ] **T5** — boucle de calibration (voir `docs/FINDINGS.md`)
+- [x] **T4** — tournoi, classement OpenSkill `μ − 3σ`, les cinq métriques §12
+- [x] **T5** — boucle de calibration : les trois critères §13 atteints
 - [ ] **T6** — restitution : replay, graphes, un finding net
+
+### Les trois critères de calibration (§13)
+
+Chacun se mesure sur le panel qui a été construit pour lui — les évaluer tous les
+trois sur les trois panels produit deux faux échecs.
+
+| Panel | Rôle | Résultat |
+|---|---|---|
+| `cooperator/conqueror/expansionist/turtle` | **équilibre** | domination **29 %**, plancher 21 %, étalement 0.99 |
+| `cooperator/betrayer/expansionist/turtle` | **parole** (§7) | `betrayer` isolé à 0 victoire — c'est un témoin |
+| `turtle/conqueror/random_legal/noop` | **levier divin** | le skill bat le hasard de **24.6** d'ordinal |
+
+Le panel plancher contient deux archétypes qui ne gagnent jamais par construction, et
+le panel de parole contient un témoin volontairement handicapé : la domination y est
+mécaniquement élevée et ne dit rien de l'équilibre.
+
+### Les cinq métriques du benchmark (§12)
+
+| Métrique | Ce qu'elle capte |
+|---|---|
+| **parole** | tient-il ses engagements ? — la métrique de théorie de l'esprit |
+| **exactitude** | ses coups sont-ils jouables ? (instruction-following) |
+| **cohérence** | poursuit-il une ligne, ou papillonne-t-il ? (`focus` + `engagement`) |
+| **alliances** | sait-il en nouer, et combien tiennent ? |
+| **survie** | reste-t-il en vie, et à quel rang finit-il ? |
+
+`focus` et `engagement` ne sont **pas** fusionnés en un seul nombre : un dieu muet
+qui paie une action de toute la partie obtient une concentration parfaite. Les
+composer demanderait une pondération arbitraire, ce que §13 proscrit.
 
 ## Trois écarts assumés à la spec
 

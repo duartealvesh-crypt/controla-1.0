@@ -31,20 +31,11 @@ def cmd_describe(args: argparse.Namespace) -> int:
 def cmd_play(args: argparse.Namespace) -> int:
     """Joue une partie et affiche son replay."""
     from controla.arena.play import MatchSpec, play_match
-    from controla.policies.factory import available_seats, build_policies
+    from controla.policies.factory import build_policies
     from controla.replay.render import render_match
 
-    seats = [name.strip() for name in args.policies.split(",")]
-    catalogue = available_seats()
-    known = set(catalogue["scripted"]) | set(catalogue["models"])
-    unknown = [name for name in seats if name not in known]
-    if unknown:
-        print(
-            f"sièges inconnus : {unknown}\n"
-            f"  archétypes : {catalogue['scripted']}\n"
-            f"  modèles    : {catalogue['models']}",
-            file=sys.stderr,
-        )
+    seats = _known_seats(args.policies)
+    if seats is None:
         return 2
 
     cfg = load_config(args.config)
@@ -69,13 +60,94 @@ def cmd_play(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tournament(args: argparse.Namespace) -> int:
+    """Joue une campagne : rotations de sièges × seeds × répétitions."""
+    from controla.arena.tournament import TournamentSpec, run_tournament
+    from controla.replay.render import render_leaderboard
+
+    seats = _known_seats(args.policies)
+    if seats is None:
+        return 2
+
+    spec = TournamentSpec(
+        seats=seats,
+        seeds=[int(value) for value in args.seeds.split(",")],
+        rotations=args.rotations,
+        repetitions=args.reps,
+        run_dir=Path(args.out) if args.out else None,
+        config_path=args.config,
+    )
+
+    def progress(index: int, total: int, result: dict) -> None:
+        winner = result["seats"][result["ranking"][0]["faction_id"]]
+        print(
+            f"  [{index + 1:>4}/{total}] seed {result['seed']:<5} "
+            f"{','.join(result['seats'])} → {winner}",
+            file=sys.stderr,
+        )
+
+    manifest = run_tournament(spec, config=load_config(args.config), on_game=progress)
+    print(render_leaderboard(manifest) if not args.json
+          else json.dumps(manifest, ensure_ascii=False, indent=1))
+    return 0
+
+
+def cmd_sweep(args: argparse.Namespace) -> int:
+    """Joue un plan de calibration : une variante de constante à la fois."""
+    from controla.arena.sweep import load_sweep, run_sweep
+    from controla.replay.render import render_sweep
+
+    spec = load_sweep(args.path, run_dir=args.out)
+    print(
+        f"plan « {spec.name} » : {len(spec.cells())} variantes × "
+        f"{len(spec.panels)} panels = {spec.games()} parties",
+        file=sys.stderr,
+    )
+    if args.dry_run:
+        for cell in spec.cells():
+            print(f"  {cell.label:30s} {cell.overrides}", file=sys.stderr)
+        return 0
+
+    def progress(step: int, total: int, label: str, panel: str, manifest: dict) -> None:
+        criteria = manifest["criteria"]["balance"]
+        print(
+            f"  [{step:>3}/{total}] {label:28.28s} {panel:12.12s} "
+            f"domination {criteria['domination']:.0%}",
+            file=sys.stderr,
+        )
+
+    manifest = run_sweep(spec, on_cell=progress)
+    print(render_sweep(manifest) if not args.json
+          else json.dumps(manifest, ensure_ascii=False, indent=1))
+    return 0
+
+
 def cmd_replay(args: argparse.Namespace) -> int:
     """Rejoue une partie stockée, à seed fixée."""
+    from controla.arena.storage import load_match
     from controla.replay.render import render_match
 
-    result = json.loads(Path(args.path).read_text(encoding="utf-8"))
-    print(render_match(result))
+    print(render_match(load_match(args.path)))
     return 0
+
+
+def _known_seats(raw: str) -> list[str] | None:
+    """Découpe et valide une liste de sièges. `None` si l'un est inconnu."""
+    from controla.policies.factory import available_seats
+
+    seats = [name.strip() for name in raw.split(",")]
+    catalogue = available_seats()
+    known = set(catalogue["scripted"]) | set(catalogue["models"])
+    unknown = [name for name in seats if name not in known]
+    if unknown:
+        print(
+            f"sièges inconnus : {unknown}\n"
+            f"  archétypes : {catalogue['scripted']}\n"
+            f"  modèles    : {catalogue['models']}",
+            file=sys.stderr,
+        )
+        return None
+    return seats
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -108,8 +180,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     play.set_defaults(func=cmd_play)
 
+    tournament = subparsers.add_parser(
+        "tournament", help="joue une campagne et classe les participants",
+    )
+    tournament.add_argument(
+        "--policies", "--models", dest="policies",
+        default="cooperator,betrayer,expansionist,turtle",
+        help="un participant par siège, séparés par des virgules",
+    )
+    tournament.add_argument(
+        "--seeds", default="1,2,3", help="seeds de monde, séparées par des virgules",
+    )
+    tournament.add_argument(
+        "--rotations", type=int, default=0,
+        help="rotations de sièges par seed (0 = toutes : chacun joue chaque coin)",
+    )
+    tournament.add_argument(
+        "--reps", type=int, default=1,
+        help="répétitions par alignement — utile aux policies stochastiques (LLM) "
+             "seulement : à monde et sièges fixés, une policy scriptée rejoue "
+             "exactement la même partie",
+    )
+    tournament.add_argument(
+        "--out", default=None, help="dossier du run (défaut : runs/<horodatage>)",
+    )
+    tournament.add_argument(
+        "--json", action="store_true", help="manifeste JSON plutôt que tableau",
+    )
+    tournament.set_defaults(func=cmd_tournament)
+
+    sweep = subparsers.add_parser(
+        "sweep", help="calibre : une variante de constante à la fois, zéro appel LLM",
+    )
+    sweep.add_argument("path", help="plan de calibration YAML (voir configs/)")
+    sweep.add_argument(
+        "--out", default=None, help="dossier du sweep (défaut : runs/sweep-<nom>)",
+    )
+    sweep.add_argument(
+        "--dry-run", action="store_true",
+        help="liste les variantes et le nombre de parties, sans rien jouer",
+    )
+    sweep.add_argument("--json", action="store_true", help="manifeste JSON")
+    sweep.set_defaults(func=cmd_sweep)
+
     replay = subparsers.add_parser("replay", help="rejoue une partie stockée")
-    replay.add_argument("path", help="fichier JSON produit par `play --out`")
+    replay.add_argument(
+        "path", help="JSON de `play --out` ou JSONL de `tournament`",
+    )
     replay.set_defaults(func=cmd_replay)
 
     return parser
