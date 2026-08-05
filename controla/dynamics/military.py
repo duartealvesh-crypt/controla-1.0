@@ -71,7 +71,23 @@ def engaged_fraction(cfg, faction: Faction) -> float:
 
 
 def engaged_force(cfg, faction: Faction) -> float:
+    """La puissance projetée : effectif engagé × qualité de l'équipement."""
     return faction.force * engaged_fraction(cfg, faction)
+
+
+def engaged_population(cfg, faction: Faction) -> float:
+    """Le nombre d'habitants réellement partis au combat.
+
+    Distinct de `engaged_force`, qui mêle l'effectif et la qualité : ce sont des
+    grandeurs différentes. Seuls des habitants peuvent mourir, pas de la qualité —
+    d'où cette base de calcul séparée pour l'attrition.
+
+    C'est le levier qui rend l'ardeur décisionnelle : un peuple qui n'engage que
+    20 % de sa population ne peut pas en perdre 68 %. Faire porter les pertes sur
+    la population TOTALE rendait toute guerre ruineuse, quelle que soit la prudence
+    avec laquelle on l'engageait.
+    """
+    return faction.population * engaged_fraction(cfg, faction)
 
 
 # ── 10. Combat ──────────────────────────────────────────────────────────────
@@ -131,17 +147,47 @@ def win_probability(cfg, attacker_force: float, defender_force: float,
     return strong / (strong + defender_force ** decisiveness)
 
 
-def _attrition(cfg, base_rate: float, margin: float, stream) -> float:
-    """Fraction perdue, décroissante avec la marge de victoire.
+def _noisy_rate(cfg, rate: float, stream) -> float:
+    """Bruit **multiplicatif** sur un taux de pertes.
 
-    Une victoire écrasante coûte peu, une victoire de justesse coûte cher. C'est
-    **le** frein anti-snowball : un peuple qui gagne toutes ses guerres mais y
-    saigne ne peut pas rouler indéfiniment sur la carte.
+    Un bruit absolu écraserait les petits taux : à 5 % de pertes, un sigma de 0.06
+    ferait varier le résultat de 0 à 11 %, soit plus que la valeur elle-même. Un
+    bruit relatif garde la même incertitude proportionnelle à toutes les échelles.
     """
+    sigma = float(cfg.combat.attrition_sigma)
+    if sigma <= 0:
+        return max(0.0, min(1.0, rate))
+    return max(0.0, min(1.0, rate * max(0.0, stream.noisy(1.0, sigma))))
+
+
+def winner_attrition(cfg, margin: float) -> float:
+    """Pertes du VAINQUEUR : `base × (1 − marge)^k`, qui tend vers zéro.
+
+    Écraser ne doit presque rien coûter. Cent combattants contre vingt, ou
+    cinquante contre dix, c'est la même marge (0.667) — l'invariance d'échelle du
+    contest de Tullock — et cela doit coûter la même chose : environ 5 %.
+
+    La forme précédente, `base × (1 + w·(1 − marge))`, avait un **plancher** : même
+    en écrasant l'adversaire on perdait `base`, soit 15 %. Multiplier les batailles
+    revenait donc à se saigner mécaniquement, quel que soit le rapport de force —
+    c'est ce qui rendait la voie militaire non viable.
+    """
+    base = float(cfg.combat.attrition_winner)
+    exponent = float(cfg.combat.attrition_winner_exponent)
+    return base * max(0.0, 1.0 - margin) ** exponent
+
+
+def loser_attrition(cfg, margin: float) -> float:
+    """Pertes du VAINCU : lourdes, et d'autant plus que la bataille fut disputée.
+
+    Le vaincu d'un affrontement serré est haché sur place ; celui qui affronte un
+    rouleau compresseur rompt et s'enfuit plus tôt. D'où une décroissance avec la
+    marge, comme pour le vainqueur mais autour d'un plancher qui, lui, reste élevé :
+    perdre doit rester grave.
+    """
+    base = float(cfg.combat.attrition_loser)
     weight = float(cfg.combat.attrition_ratio_weight)
-    rate = base_rate * (1.0 + weight * (1.0 - margin))
-    rate = stream.noisy(rate, float(cfg.combat.attrition_sigma))
-    return max(0.0, min(1.0, rate))
+    return base * (1.0 + weight * (1.0 - margin))
 
 
 def resolve_battle(
@@ -171,20 +217,23 @@ def resolve_battle(
     total = attack_force + defend_force
     margin = 0.0 if total <= 0 else abs(attack_force - defend_force) / total
 
-    winner_rate = _attrition(cfg, float(cfg.combat.attrition_winner), margin, stream)
-    loser_rate = _attrition(cfg, float(cfg.combat.attrition_loser), margin, stream)
+    winner_rate = _noisy_rate(cfg, winner_attrition(cfg, margin), stream)
+    loser_rate = _noisy_rate(cfg, loser_attrition(cfg, margin), stream)
 
     if attacker_won:
         attacker_rate, defender_rate = winner_rate, loser_rate
     else:
         attacker_rate, defender_rate = loser_rate, winner_rate
 
+    # Les pertes s'appliquent aux habitants ENGAGÉS, pas à la population entière :
+    # seuls ceux qui sont partis peuvent tomber. L'ardeur devient donc un vrai
+    # arbitrage — engager 85 % de son peuple, c'est risquer 85 % de son peuple.
     attacker_losses = 0.0
     for faction in attacking:
-        lost = faction.population * attacker_rate
+        lost = engaged_population(cfg, faction) * attacker_rate
         faction.population = max(0.0, faction.population - lost)
         attacker_losses += lost
-    defender_losses = defender.population * defender_rate
+    defender_losses = engaged_population(cfg, defender) * defender_rate
     defender.population = max(0.0, defender.population - defender_losses)
 
     annexed: tuple[int, int] | None = None
@@ -207,6 +256,22 @@ def resolve_battle(
             for faction in beneficiaries:
                 faction.set_stock(resource, faction.stock(resource) + per_head)
             loot[resource] = taken
+
+        # Le vainqueur s'approprie aussi une part du SAVOIR du vaincu : c'est la
+        # voie par laquelle la conquête ouvre le palier 1, donc le Métal, donc la
+        # route technologique vers la Force. Sans elle, la guerre n'alimentait
+        # aucun axe de score durable.
+        #
+        # Le vaincu perd des travaux mais JAMAIS un palier déjà atteint : on vole
+        # des recherches, on ne fait pas oublier ce qui est bâti. Les paliers
+        # restent monotones, comme partout ailleurs.
+        stolen = defender.research * float(cfg.combat.research_loot_fraction) * margin
+        if stolen > 0:
+            defender.research = max(0.0, defender.research - stolen)
+            per_head = stolen / len(beneficiaries)
+            for faction in beneficiaries:
+                faction.research += per_head
+            loot["research"] = stolen
 
     return BattleOutcome(
         attacker=attacker.id,

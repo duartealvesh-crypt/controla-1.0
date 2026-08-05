@@ -438,6 +438,52 @@ def test_metal_appears_only_after_the_first_research_tier(world):
     assert faction.metal > 0.0
 
 
+def test_research_slows_down_as_it_accumulates(world):
+    """La recherche était le seul axe sans rendement décroissant — donc la
+    stratégie dominante que §12 interdit. Le gain doit chuter avec le cumul."""
+    cfg = world[0]
+    knee = float(cfg.research.slowdown_knee)
+
+    assert economy.research_slowdown(cfg, 0.0) == 1.0
+    assert economy.research_slowdown(cfg, knee) == pytest.approx(0.5)
+
+    factors = [economy.research_slowdown(cfg, r) for r in (0, 5, 10, 20, 40)]
+    assert factors == sorted(factors, reverse=True), "le gain ne décroît pas"
+    # Passé la deuxième amélioration, ça doit devenir VRAIMENT lent.
+    assert economy.research_slowdown(cfg, 2 * knee) < 0.25
+
+
+def test_research_growth_is_sub_linear_over_a_game(world):
+    """Sur 15 tours, un peuple entièrement tourné vers la tech ne doit pas
+    accumuler un ordre de grandeur de plus que les autres."""
+    cfg, _catalog, state, _rng = world
+    faction = state.faction(0)
+    faction.traits["intelligence"] = float(cfg.traits.max)
+    for tile in state.tiles_of(faction.id)[:3]:
+        tile.building = "lab"
+
+    for _ in range(int(cfg.world.max_turns)):
+        economy.advance_research(cfg, state)
+
+    linear = (
+        float(cfg.research.base_rate) + 3 * float(cfg.research.per_lab)
+    ) * 2.5 * int(cfg.world.max_turns)
+    assert faction.research < linear / 2, (
+        f"la recherche croît quasi linéairement ({faction.research:.1f})"
+    )
+    assert faction.research_tier == 3, "la voie tech doit rester atteignable"
+
+
+def test_score_counts_research_tiers_not_raw_points(world):
+    """Scorer les points bruts laissait l'axe tech s'accumuler sans limite."""
+    from controla.dynamics.scoring import score_components
+
+    _cfg, _catalog, state, _rng = world
+    faction = state.faction(0)
+    faction.research, faction.research_tier = 999.0, 2
+    assert score_components(state, 0)["research"] == 2.0
+
+
 def test_research_tiers_are_monotonic(world):
     """Un palier atteint n'est jamais reperdu — sinon le dieu ne peut plus planifier."""
     cfg, _catalog, state, _rng = world

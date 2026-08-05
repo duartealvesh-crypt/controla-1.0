@@ -108,6 +108,7 @@ def render_rules(cfg, catalog: Catalog) -> str:
     blocks.append(_section(
         "RECHERCHE",
         [f"  • {spec.describe(cfg, catalog)}" for spec in catalog.research_tiers],
+        formulas["research"],
     ))
 
     for kind, title, preamble in _ACTION_SECTIONS:
@@ -130,12 +131,17 @@ def render_rules(cfg, catalog: Catalog) -> str:
             f"  {formulas['engaged_force']}",
             f"  {formulas['combat']}",
             f"  {formulas['attrition']}",
+            f"  {formulas['conquest']}",
         ],
     ))
 
     blocks.append(_section(
         "POPULATION ET DÉRIVE",
-        [f"  {formulas['population']}", f"  {formulas['drift']}"],
+        [
+            f"  {formulas['population']}",
+            f"  {formulas['expansion']}",
+            f"  {formulas['drift']}",
+        ],
     ))
 
     blocks.append(_section(

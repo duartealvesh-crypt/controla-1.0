@@ -67,6 +67,21 @@ ARCHETYPES: dict[str, Archetype] = {
         commitment_rate=0.8, honour_rate=0.0,
         commitment_kinds={"war_alliance": 1.0, "econ_alliance": 1.0},
     ),
+    "conqueror": Archetype(
+        name="conqueror",
+        # Le militaire PUR, et le contrôle dont le panel manquait : belliqueux mais
+        # loyal, et qui ne pose jamais d'embargo. `betrayer` mêlait agression et
+        # traîtrise, on ne pouvait donc pas savoir si sa dernière place venait de sa
+        # belligérance ou de son coût social. Ici, seule la conquête est testée.
+        kind_weights={"influence": 1.8, "miracle": 1.2, "diplomacy": 1.0},
+        effect_weights={"war_desire": 2.0, "embargo": -1.0, "trade_relation": 0.4,
+                        "tile_modifier": 0.6},
+        trait_weights={"warrior": 1.5, "worker": 0.4},
+        commitment_rate=0.7, honour_rate=1.0,
+        # Il tient ses pactes de guerre parce qu'il appelle à la guerre de toute
+        # façon : promettre ce qu'on allait faire est la loyauté la moins coûteuse.
+        commitment_kinds={"war_alliance": 1.0, "econ_alliance": 0.3},
+    ),
     "tit_for_tat": Archetype(
         name="tit_for_tat",
         kind_weights={"diplomacy": 2.0, "influence": 1.2, "miracle": 1.0},
@@ -159,6 +174,7 @@ class ScriptedPolicy(Policy):
             * self._target_bias(entry, view)
             * self._commitment_bias(entry)
             * self._reciprocity_bias(entry, view)
+            * self._promise_bias(entry, view)
             * self._loyalty_bias(entry, view)
         )
 
@@ -186,6 +202,33 @@ class ScriptedPolicy(Policy):
         if (pledge, -1 if victim is None else victim) not in offered:
             return 1.0
         return 1.0 + 8.0 * self.archetype.commitment_rate
+
+    def _promise_bias(self, entry: dict, view: dict) -> float:
+        """Diriger son agression vers la cible PROMISE.
+
+        S'abstenir de frapper un allié ne suffit pas à tenir un pacte de guerre :
+        il faut payer l'appel contre la cible nommée, le même tour que lui. Mesuré
+        sur le `conqueror` : 12 % de parole malgré une loyauté maximale, parce qu'il
+        appelait à la guerre en permanence — mais rarement contre le bon.
+
+        Un dieu belliqueux n'est donc pas automatiquement un allié fiable ; la
+        loyauté demande de viser, pas seulement de s'abstenir.
+        """
+        target = self._partner(entry["target"])
+        if target is None or not any(
+            self._effect_key(effect) == "war_desire" for effect in entry["spec"].effects
+        ):
+            return 1.0
+
+        promised = {
+            item["victim"] for item in view.get("commitments", [])
+            if item["breached_turn"] is None
+            and item["expires_turn"] >= view["turn"]
+            and item.get("victim", -1) >= 0
+        }
+        if target not in promised:
+            return 1.0
+        return 1.0 + 6.0 * self.archetype.honour_rate
 
     def _loyalty_bias(self, entry: dict, view: dict) -> float:
         """Évite (ou non) les coups qui rompraient un engagement en cours.

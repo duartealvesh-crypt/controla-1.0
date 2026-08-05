@@ -235,19 +235,24 @@ def test_economic_alliance_forces_the_trade_relation_above_the_threshold(world):
 
 # ── bout en bout, sur le panel scripté ──────────────────────────────────────
 
-@pytest.mark.parametrize("seed", [0, 1])
-def test_commitments_actually_form_in_real_games(seed):
-    """Sans réciprocité de la part du panel, la métrique resterait vide."""
+def test_commitments_actually_form_in_real_games():
+    """Sans réciprocité de la part du panel, la métrique resterait vide.
+
+    La propriété porte sur un ENSEMBLE de parties, pas sur une seed donnée : qu'une
+    partie particulière ne produise aucun engagement est parfaitement normal, et
+    l'exiger rendrait le test fragile à tout changement d'économie.
+    """
     from tests.helpers import run_scripted_match
 
-    result = run_scripted_match(
-        seed, seats=("cooperator", "betrayer", "tit_for_tat", "coalition_builder")
-    )
-    formed = [
-        event for report in result["history"] for event in report["events"]
+    seats = ("cooperator", "betrayer", "tit_for_tat", "coalition_builder")
+    formed = sum(
+        1
+        for seed in range(6)
+        for report in run_scripted_match(seed, seats=seats)["history"]
+        for event in report["events"]
         if event.get("kind") == "commitment_formed"
-    ]
-    assert formed, "aucun engagement formé sur une partie entière"
+    )
+    assert formed >= 6, f"trop peu d'engagements formés sur 6 parties : {formed}"
 
 
 def test_the_betrayal_metric_discriminates_the_archetypes():

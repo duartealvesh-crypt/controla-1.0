@@ -221,9 +221,19 @@ def verify(cfg, catalog, state) -> list[dict]:
         else:
             commitment.breached_turn = state.turn
             state.faction(traitor).reputation.betrayed += 1
+            # Le partenaire loyal est CRÉDITÉ : il a payé ce qu'il avait promis, et
+            # sa réputation ne doit pas dépendre du choix qu'a fait l'autre.
+            #
+            # Sans cela, un dieu de parole allié à un traître voyait son propre taux
+            # s'effondrer — mesuré à 12 % pour un archétype de loyauté maximale. Le
+            # compteur mesurait alors la chance d'avoir un bon partenaire, pas la
+            # parole, ce qui est exactement ce qu'on cherche à éviter (§7).
+            loyal = first if traitor == second.id else second
+            loyal.reputation.honored += 1
             events.append({
                 "kind": "commitment_betrayed", "commitment": commitment.kind,
-                "faction": traitor, "parties": list(commitment.parties),
+                "faction": traitor, "loyal": loyal.id,
+                "parties": list(commitment.parties),
                 "cause": reason,
             })
     return events

@@ -396,14 +396,47 @@ def describe_formulas(cfg) -> dict[str, str]:
             "Une armée deux fois supérieure gagne donc largement mais pas "
             "toujours. Une attaque NON DÉTECTÉE bénéficie d'un bonus de surprise "
             f"de ×{cfg.combat.surprise:.2f} — c'est la récompense d'une traîtrise "
-            f"réussie. Une attaque met {cfg.combat.march_turns} tour(s) à arriver : "
-            "c'est la fenêtre de réaction du défenseur, s'il la voit venir."
+            "réussie. Tu peux frapper N'IMPORTE QUELLE case ennemie, même "
+            f"lointaine : une cible frontalière est atteinte en "
+            f"{cfg.combat.march_turns} tour(s), une cible éloignée en "
+            f"{int(cfg.combat.march_turns) + int(cfg.combat.distant_march_turns)}. "
+            "Ce délai est la fenêtre de réaction du défenseur, s'il voit venir "
+            "l'attaque — la distance protège donc, sans mettre à l'abri."
+        ),
+        "conquest": (
+            "Une victoire annexe la case visée et prélève une part des stocks du "
+            "vaincu, d'autant plus grande que la marge est nette. Le vainqueur "
+            "s'approprie aussi une part de la RECHERCHE du vaincu : la conquête "
+            "est donc une voie vers les paliers technologiques, et notamment vers "
+            "le Métal. Le vaincu perd des travaux mais jamais un palier déjà "
+            "atteint."
+        ),
+        "expansion": (
+            "Ton peuple colonise seul les cases vides voisines quand sa population "
+            "et sa densité de bâtiments l'y poussent — mais coloniser COÛTE de la "
+            "nourriture, et d'autant plus que ton territoire est déjà vaste. Un "
+            "empire affamé cesse de s'étendre. La terre est donc rare : la prendre "
+            "à un voisin est parfois moins cher que d'en défricher."
         ),
         "attrition": (
             "Le vainqueur saigne aussi. Les pertes dépendent du ratio de forces : "
             "une victoire écrasante coûte peu, une victoire de justesse coûte "
             "cher. C'est le frein anti-snowball — gagner toutes ses guerres en y "
-            "perdant son peuple ne permet pas de rouler sur la carte."
+            "perdant son peuple ne permet pas de rouler sur la carte.\n"
+            "  Les pertes ne frappent que les habitants PARTIS AU COMBAT, jamais "
+            "ceux restés au pays. L'ardeur de ton peuple est donc un arbitrage : "
+            "engager beaucoup, c'est frapper fort mais risquer gros ; engager peu, "
+            "c'est se protéger au prix de la défaite probable — et donc du "
+            "territoire perdu."
+        ),
+        "research": (
+            "La Recherche progresse d'autant plus vite que ton peuple compte de "
+            "laboratoires et d'Intelligence — mais elle RALENTIT à mesure qu'elle "
+            f"avance : le gain est divisé par deux vers {cfg.research.slowdown_knee:.0f} "
+            "points, et devient très lent au-delà. Passé la deuxième amélioration, "
+            "chaque point coûte cher. Au score, ce sont les PALIERS ATTEINTS qui "
+            "comptent, pas les points accumulés : dépasser un palier sans atteindre "
+            "le suivant ne rapporte rien."
         ),
         "population": (
             "La population suit une croissance logistique : rapide loin du "
@@ -433,8 +466,10 @@ def describe_formulas(cfg) -> dict[str, str]:
         ),
         "score": (
             "Score final = population × {population:.2f} + cases × {tiles:.2f} + "
-            "recherche × {research:.2f} + bâtiments × {buildings:.2f}. Multi-axes "
-            "volontairement : les voies économique, militaire et technologique "
-            "restent toutes viables."
+            "PALIER de recherche × {research:.2f} + bâtiments × {buildings:.2f}. "
+            "Multi-axes volontairement : les voies économique, militaire et "
+            "technologique restent toutes viables. Aucun axe n'est illimité — la "
+            "population plafonne, le territoire est borné par la durée de la "
+            "partie, et la recherche compte au plus 3 paliers."
         ).format(**dict(cfg.score.weights)),
     }

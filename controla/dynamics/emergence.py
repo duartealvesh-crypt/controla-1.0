@@ -103,8 +103,22 @@ def _pick(stream, cfg, options: list, scores: list[float]):
 
 # ── 9a. Expansion ───────────────────────────────────────────────────────────
 
+def settle_cost(cfg, state: GameState, faction: Faction) -> float:
+    """Nourriture nécessaire pour coloniser une case de plus.
+
+    Croît avec le territoire déjà tenu : plus l'empire est étendu, plus il est
+    coûteux d'en pousser les marges. C'est ce qui rend le territoire **rare**, donc
+    la conquête intéressante — sans ce coût, l'expansion se déclenchait chaque tour
+    pour tout le monde et l'axe territoire ne discriminait rien.
+    """
+    tiles = max(1, state.tile_count(faction.id))
+    return float(cfg.emergence.expansion_food_cost) * (
+        tiles ** float(cfg.emergence.expansion_cost_exponent)
+    )
+
+
 def expand(cfg, catalog: Catalog, state: GameState, rng) -> list[dict]:
-    """Le peuple s'étend seul vers les cases vides adjacentes."""
+    """Le peuple s'étend seul vers les cases vides adjacentes, s'il peut la payer."""
     events: list[dict] = []
     for faction in state.living:
         stream = rng.stream(state.turn, "expansion", faction.id)
@@ -119,15 +133,22 @@ def expand(cfg, catalog: Catalog, state: GameState, rng) -> list[dict]:
         if desire <= threshold:
             continue
 
+        cost = settle_cost(cfg, state, faction)
+        if faction.food < cost:
+            continue
+
         frontier = state.grid.empty_neighbours_of(state.coords_of(faction.id))
         if not frontier:
             continue
         scores = [_tile_score(catalog, tile, None) for tile in frontier]
         tile = _pick(stream, cfg, frontier, scores)
+        faction.set_stock("food", faction.food - cost)
         tile.owner = faction.id
         events.append({
             "kind": "expansion", "faction": faction.id, "tile": list(tile.coord),
-            "cause": f"envie d'expansion {desire:.2f} > seuil {threshold:.2f}",
+            "cost": round(cost, 2),
+            "cause": f"envie d'expansion {desire:.2f} > seuil {threshold:.2f}, "
+                     f"{cost:.1f} nourriture dépensée",
         })
     return events
 
@@ -229,16 +250,35 @@ def trade(cfg, state: GameState, rng) -> list[dict]:
 # ── 9d. Déclenchement de guerre ─────────────────────────────────────────────
 
 def _attackable_tiles(state: GameState, attacker_id: int, defender_id: int) -> list:
-    """Cases de la cible adjacentes à notre territoire — la portée d'une attaque."""
+    """Toutes les cases de la cible : l'adjacence n'est plus requise.
+
+    Exiger un territoire contigu enfermait la guerre dans les querelles de voisinage
+    et empêchait toute coalition de frapper un leader éloigné — or c'est le
+    contre-pouvoir que §12 attend de la diplomatie. Une cible lointaine reste
+    atteignable ; c'est le TRAJET qui coûte (voir `march_delay`).
+    """
+    return list(state.tiles_of(defender_id))
+
+
+def is_adjacent(state: GameState, attacker_id: int, tile) -> bool:
     own = state.coords_of(attacker_id)
-    out = []
-    for tile in state.tiles_of(defender_id):
-        if any(
-            neighbour.coord in own
-            for neighbour in state.grid.neighbours(tile.x, tile.y)
-        ):
-            out.append(tile)
-    return out
+    return any(
+        neighbour.coord in own
+        for neighbour in state.grid.neighbours(tile.x, tile.y)
+    )
+
+
+def march_delay(cfg, state: GameState, attacker_id: int, tile) -> int:
+    """Tours de marche avant que l'assaut ne se résolve.
+
+    Une case frontalière est atteinte au délai de base ; une case lointaine coûte
+    `distant_march_turns` de plus. Le défenseur d'une cible éloignée dispose donc
+    d'une fenêtre de réaction plus longue — la distance protège, sans interdire.
+    """
+    base = int(cfg.combat.march_turns)
+    if is_adjacent(state, attacker_id, tile):
+        return base
+    return base + int(cfg.combat.distant_march_turns)
 
 
 def detects_attack(state: GameState, defender: Faction, attacker_id: int) -> bool:
@@ -284,18 +324,23 @@ def trigger_wars(cfg, catalog: Catalog, state: GameState, rng) -> list[dict]:
             reachable = _attackable_tiles(state, faction.id, target_id)
             if not reachable:
                 continue
+            # Le peuple préfère ce qui est proche et ce qui est bâti : une case
+            # frontalière vaut mieux qu'un raid lointain, à valeur égale.
             scores = [
-                _tile_score(catalog, tile, None) + (2.0 if tile.building else 0.0)
+                _tile_score(catalog, tile, None)
+                + (2.0 if tile.building else 0.0)
+                + (2.0 if is_adjacent(state, faction.id, tile) else 0.0)
                 for tile in reachable
             ]
             tile = _pick(stream, cfg, reachable, scores)
+            delay = march_delay(cfg, state, faction.id, tile)
 
             # La surprise est figée AU DÉPART, quand la détection a lieu — pas à la
             # résolution, où le défenseur sera de toute façon en guerre.
             surprise = not detects_attack(state, defender, faction.id)
             state.effects.add(
                 "attack",
-                due_turn=state.turn + int(cfg.combat.march_turns),
+                due_turn=state.turn + delay,
                 actor=faction.id,
                 cause=f"envie de guerre {appetite:.2f} > seuil {threshold:.2f}",
                 defender=target_id,
@@ -307,7 +352,8 @@ def trigger_wars(cfg, catalog: Catalog, state: GameState, rng) -> list[dict]:
             faction.war_desire[target_id] = 0.0   # l'envie est consommée par l'assaut
             events.append({
                 "kind": "war_launched", "faction": faction.id, "target": target_id,
-                "tile": list(tile.coord), "surprise": surprise,
-                "cause": f"envie de guerre {appetite:.2f} > seuil {threshold:.2f}",
+                "tile": list(tile.coord), "surprise": surprise, "march": delay,
+                "cause": f"envie de guerre {appetite:.2f} > seuil {threshold:.2f}, "
+                         f"{delay} tour(s) de marche",
             })
     return events

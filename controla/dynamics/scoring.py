@@ -14,12 +14,21 @@ from controla.state.game_state import GameState
 
 
 def score_components(state: GameState, faction_id: int) -> dict[str, float]:
-    """Les axes du score, séparés — utile au diagnostic (quelle voie a payé ?)."""
+    """Les axes du score, séparés — utile au diagnostic (quelle voie a payé ?).
+
+    L'axe technologique compte les **paliers atteints**, pas les points bruts. Un
+    palier est ce qui change réellement le jeu (le Métal, le rendement agricole, la
+    vision) ; les points ne sont qu'un compteur de progression vers le suivant.
+
+    C'est aussi ce qui borne l'axe à 3, comme les autres axes sont bornés par `K`,
+    par les 15 tours ou par le bois. Scorer les points bruts laissait la voie tech
+    accumuler sans limite et gagner 24 parties sur 24.
+    """
     faction = state.faction(faction_id)
     return {
         "population": faction.population,
         "tiles": float(state.tile_count(faction_id)),
-        "research": faction.research,
+        "research": float(faction.research_tier),
         "buildings": float(state.building_total(faction_id)),
     }
 

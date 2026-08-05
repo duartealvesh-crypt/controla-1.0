@@ -182,6 +182,24 @@ def grow_population(cfg, state: GameState) -> dict[int, dict]:
 
 # ── 5. Recherche ────────────────────────────────────────────────────────────
 
+def research_slowdown(cfg, research: float) -> float:
+    """Facteur de ralentissement, décroissant avec la recherche déjà accumulée.
+
+    `1 / (1 + (R / genou) ^ raideur)` : plein régime au départ, divisé par deux au
+    genou, puis de plus en plus lent. Le genou est calé sur le palier 2, donc
+    « passé la deuxième amélioration, ça devient très lent ».
+
+    C'est la brique qui manquait : la recherche était le seul axe de score sans
+    rendement décroissant, ce qui en faisait mécaniquement la stratégie dominante
+    que §12 interdit. À raideur 2, la recherche cumulée croît en racine cubique du
+    temps — pratiquement bornée sur 15 tours, sans mur artificiel.
+    """
+    knee = float(cfg.research.slowdown_knee)
+    if knee <= 0 or research <= 0:
+        return 1.0
+    return 1.0 / (1.0 + (research / knee) ** float(cfg.research.slowdown_steepness))
+
+
 def advance_research(cfg, state: GameState) -> dict[int, dict]:
     """Progression de la Recherche et franchissement des paliers.
 
@@ -192,12 +210,15 @@ def advance_research(cfg, state: GameState) -> dict[int, dict]:
     report: dict[int, dict] = {}
     for faction in state.living:
         labs = state.building_counts(faction.id).get("lab", 0)
-        gain = (
+        raw = (
             float(cfg.research.base_rate)
             + float(cfg.research.per_lab) * labs
         ) * trait_multiplier(
             faction, "intelligence", float(cfg.research.intelligence_weight)
         )
+        # Le ralentissement lit la recherche AVANT ce gain : deux factions au même
+        # niveau progressent donc au même rythme, quel que soit l'ordre de la passe.
+        gain = raw * research_slowdown(cfg, faction.research)
         faction.research += gain
 
         reached = sum(1 for threshold in thresholds if faction.research >= threshold)
