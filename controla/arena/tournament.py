@@ -45,7 +45,15 @@ class TournamentSpec:
     # une centaine de mégaoctets pour n'en lire qu'un tableau de nombres. Le sweep
     # les jette donc ; une campagne de classement les garde, ce sont ses replays.
     keep_games: bool = True
+    # Instantanés de plateau, qui rendent les parties rejouables à l'écran.
+    # `None` = « comme `keep_games` » : une campagne qui garde ses parties les
+    # garde rejouables, un sweep qui les jette n'en paie pas le calcul.
+    snapshots: bool | None = None
     metadata: dict = field(default_factory=dict)
+
+    @property
+    def with_snapshots(self) -> bool:
+        return self.keep_games if self.snapshots is None else bool(self.snapshots)
 
     def line_ups(self) -> list[tuple[int, list[str]]]:
         """Les alignements de la campagne : `(indice de rotation, sièges)`."""
@@ -120,6 +128,7 @@ def run_tournament(spec: TournamentSpec, config=None, on_game=None) -> dict:
             seed=entry["seed"],
             seats=list(entry["seats"]),
             config_path=spec.config_path,
+            snapshots=spec.with_snapshots,
             metadata={"rotation": entry["rotation"],
                       "repetition": entry["repetition"]},
         )

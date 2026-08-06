@@ -11,10 +11,23 @@ from controla.dynamics.scoring import score
 from controla.registry.catalog import Catalog
 from controla.state.game_state import GameState
 
-# Un caractère par terrain, un par bâtiment. Purement cosmétique.
-_TERRAIN_GLYPHS = {"plain": ".", "river": "~", "forest": "#"}
-_BUILDING_GLYPHS = {"city": "C", "lab": "L", "camp": "X", "field": "F"}
+# Un caractère par terrain, un par bâtiment. Cosmétique, mais PAS arbitraire :
+# les glyphes doivent rester deux à deux distincts, sans quoi deux bâtiments
+# différents deviennent indiscernables à l'écran. « Camp militaire » et
+# « Champs » commencent tous deux par C — les dériver du libellé produirait
+# exactement cette collision, d'où cette table explicite.
+#
+# Publiques parce que l'interface web les sert au navigateur : une seconde table
+# côté JavaScript rejouerait la collision qu'on vient d'éviter.
+TERRAIN_GLYPHS = {"plain": ".", "river": "~", "forest": "#"}
+BUILDING_GLYPHS = {"city": "C", "lab": "L", "camp": "X", "field": "F"}
 _OWNER_GLYPHS = "0123"
+
+
+def building_glyph(key: str) -> str:
+    """Glyphe d'un bâtiment. Un mod non déclaré retombe sur son initiale — au
+    risque d'une collision, que la table ci-dessus est justement là pour lever."""
+    return BUILDING_GLYPHS.get(key, key[:1].upper() or "?")
 
 
 def render_map(state: GameState) -> str:
@@ -25,11 +38,11 @@ def render_map(state: GameState) -> str:
         for x in range(state.grid.size):
             tile = state.grid.get(x, y)
             if tile.building is not None:
-                row.append(_BUILDING_GLYPHS.get(tile.building, "?"))
+                row.append(building_glyph(tile.building))
             elif tile.owner is not None:
                 row.append(_OWNER_GLYPHS[tile.owner % len(_OWNER_GLYPHS)])
             else:
-                row.append(_TERRAIN_GLYPHS.get(tile.terrain, "?"))
+                row.append(TERRAIN_GLYPHS.get(tile.terrain, "?"))
         lines.append(" ".join(row))
     return "\n".join(lines)
 

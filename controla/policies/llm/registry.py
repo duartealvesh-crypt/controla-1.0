@@ -53,6 +53,27 @@ def load_dotenv_if_present(start: Path | None = None) -> Path | None:
     return found
 
 
+def provider_headers(provider: str) -> dict[str, str]:
+    """En-têtes optionnels d'un fournisseur, lus eux aussi dans l'environnement.
+
+    Seul OpenRouter en demande aujourd'hui (attribution : `HTTP-Referer` et
+    `X-Title`). Ils sont purement décoratifs — un en-tête absent ne change ni la
+    réponse ni la facturation — d'où l'absence de toute erreur si les variables
+    ne sont pas renseignées.
+    """
+    if provider.lower() != "openrouter":
+        return {}
+    headers = {}
+    for variable, header in (
+        ("OPENROUTER_APP_URL", "HTTP-Referer"),
+        ("OPENROUTER_APP_NAME", "X-Title"),
+    ):
+        value = os.environ.get(variable)
+        if value:
+            headers[header] = value
+    return headers
+
+
 def provider_credentials(provider: str) -> tuple[str, str]:
     """`(base_url, api_key)` d'un fournisseur, ou une erreur explicite.
 
@@ -91,6 +112,7 @@ def get_backend(
             return entry[key]
         return getattr(defaults, key) if defaults is not None else fallback
 
+    max_tokens = setting("max_tokens", 2048)
     backend = LLMBackend(
         base_url=base_url,
         api_key=api_key,
@@ -98,9 +120,12 @@ def get_backend(
         tool_support=bool(entry.get("tool_support", True)),
         timeout=float(setting("timeout", 60.0)),
         temperature=setting("temperature", 0.7),
-        max_tokens=int(setting("max_tokens", 2048)),
+        # `None` reste `None` : un modèle peut légitimement vouloir qu'aucun
+        # plafond ne soit envoyé, et `int(None)` planterait la campagne.
+        max_tokens=None if max_tokens is None else int(max_tokens),
         seed=setting("seed", None),
         max_retries=int(setting("max_retries", 2)),
+        default_headers=provider_headers(entry["provider"]),
     )
     cache[model_name] = backend
     return backend

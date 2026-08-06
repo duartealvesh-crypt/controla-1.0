@@ -58,12 +58,16 @@ class ControlaEnv(AECEnv):
                 "is_parallelizable": False}
 
     def __init__(self, config=None, config_path=None, render_mode: str | None = None,
-                 journal_rng: bool = False):
+                 journal_rng: bool = False, snapshots: bool = False):
         super().__init__()
         self.cfg = config if config is not None else load_config(config_path)
         self.catalog = build_catalog(self.cfg)
         self.render_mode = render_mode
         self._journal_rng = journal_rng
+        # Instantanés de plateau pour la restitution (§14.6). Optionnels, et
+        # coupés par défaut : un sweep joue des milliers de parties dont il ne
+        # lit qu'un tableau de nombres, et n'a que faire de leurs cartes.
+        self._snapshots = snapshots
 
         count = int(self.cfg.world.num_factions)
         self.possible_agents = [agent_name(index) for index in range(count)]
@@ -242,6 +246,12 @@ class ControlaEnv(AECEnv):
 
         report = run_development_pass(self.cfg, self.catalog, self.state_, self.rng)
         report.events = events + report.events
+        if self._snapshots:
+            # Posé ICI et pas ailleurs : c'est le seul instant où l'état est
+            # exactement « fin du tour N », après la passe et avant que la ronde
+            # suivante ne bufferise quoi que ce soit.
+            from controla.replay.snapshot import board_snapshot
+            report.board = board_snapshot(self.cfg, self.catalog, self.state_)
         self.turn_reports.append(report)
 
         after = score_snapshot(self.cfg, self.state_)

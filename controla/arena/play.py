@@ -25,6 +25,11 @@ class MatchSpec:
     seats: list[str]
     config_path: str | None = None
     journal_rng: bool = False
+    # Joint à la partie de quoi la REJOUER visuellement : la carte et l'état du
+    # plateau à chaque tour. Coupé par défaut — un sweep de 2 016 parties n'en
+    # lit qu'un tableau de nombres, les lui écrire serait une centaine de
+    # mégaoctets pour rien.
+    snapshots: bool = False
     metadata: dict = field(default_factory=dict)
 
 
@@ -41,9 +46,18 @@ def play_match(
     invalides — ce plafond garantit qu'aucun tournoi ne pend.
     """
     env = ControlaEnv(
-        config=config, config_path=spec.config_path, journal_rng=spec.journal_rng
+        config=config, config_path=spec.config_path, journal_rng=spec.journal_rng,
+        snapshots=spec.snapshots,
     )
     env.reset(seed=spec.seed)
+
+    world = None
+    if spec.snapshots:
+        from controla.replay.snapshot import board_snapshot, world_snapshot
+        world = world_snapshot(env.cfg, env.catalog, env.state_)
+        # Le tour 0 n'a pas de rapport de passe : sans cet instantané, la
+        # restitution démarrerait après que le premier tour a déjà tout changé.
+        world["initial_board"] = board_snapshot(env.cfg, env.catalog, env.state_)
 
     for agent, policy in zip(env.possible_agents, policies):
         policy.reset(faction_id_of(agent), spec.seed)
@@ -86,6 +100,8 @@ def play_match(
         "wall_seconds": round(time.perf_counter() - started, 3),
         **spec.metadata,
     }
+    if world is not None:
+        result["world"] = world
 
     # Les policies qui savent se rendre des comptes (LLM) versent leurs métriques :
     # taux d'action invalide, tours muets, latence. Sans elles, un modèle muet

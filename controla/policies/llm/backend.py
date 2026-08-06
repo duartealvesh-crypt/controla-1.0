@@ -69,11 +69,22 @@ def classify(error: Exception) -> str:
 @dataclass
 class CallStats:
     """Santé d'un modèle sur une campagne. Sans ces compteurs, un modèle muet
-    passerait pour un modèle prudent."""
+    passerait pour un modèle prudent.
+
+    Les tokens y sont comptés parce que le budget est LA contrainte de campagne
+    (FINDINGS n° 5) et qu'il n'est pas déductible du nombre d'appels : deux
+    modèles au même nombre d'appels peuvent différer d'un facteur trois selon la
+    longueur de leur raisonnement. `cached_tokens` isole ce que le fournisseur a
+    servi depuis son cache — c'est la seule façon de vérifier qu'un cache
+    supposé actif l'est vraiment, plutôt que de le supposer.
+    """
 
     calls: int = 0
     failures: dict[str, int] = field(default_factory=dict)
     latencies: list[float] = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
 
     def record(self, seconds: float, error_kind: str | None = None) -> None:
         self.calls += 1
@@ -81,9 +92,35 @@ class CallStats:
         if error_kind:
             self.failures[error_kind] = self.failures.get(error_kind, 0) + 1
 
+    def record_usage(self, usage) -> None:
+        """Absorbe le bloc `usage` d'une réponse, quel que soit le fournisseur.
+
+        Défensif par construction : `usage` est optionnel dans la spec OpenAI et
+        plusieurs passerelles l'omettent ou le nomment autrement. Un champ
+        manquant doit coûter un compteur à zéro, jamais une campagne plantée.
+        """
+        if usage is None:
+            return
+        self.prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
+        self.completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) if details is not None else 0
+        self.cached_tokens += int(cached or 0)
+
     @property
     def response_rate(self) -> float:
         return 1.0 if not self.calls else 1.0 - sum(self.failures.values()) / self.calls
+
+    @property
+    def cache_hit_rate(self) -> float | None:
+        """Part du prompt servie par le cache du fournisseur.
+
+        `None` tant qu'aucun token n'a été compté — un zéro afficherait « cache
+        inactif » là où l'on ne sait simplement rien.
+        """
+        if not self.prompt_tokens:
+            return None
+        return self.cached_tokens / self.prompt_tokens
 
     def to_dict(self) -> dict:
         ordered = sorted(self.latencies)
@@ -93,6 +130,12 @@ class CallStats:
             "response_rate": round(self.response_rate, 4),
             "latency_mean": round(sum(ordered) / len(ordered), 3) if ordered else None,
             "latency_max": round(ordered[-1], 3) if ordered else None,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "cached_tokens": self.cached_tokens,
+            "cache_hit_rate": (
+                None if self.cache_hit_rate is None else round(self.cache_hit_rate, 4)
+            ),
         }
 
 
@@ -110,6 +153,7 @@ class LLMBackend:
         max_tokens: int | None = None,
         seed: int | None = None,
         max_retries: int = 2,
+        default_headers: dict[str, str] | None = None,
     ):
         if not _AVAILABLE:                            # pragma: no cover
             raise ImportError(
@@ -123,6 +167,11 @@ class LLMBackend:
         self.stats = CallStats()
         self._client = OpenAI(
             base_url=base_url, api_key=api_key, timeout=timeout, max_retries=max_retries,
+            # En-têtes propres au fournisseur (attribution OpenRouter, par
+            # exemple). Ils ne changent pas la réponse ; les faire passer par le
+            # client plutôt que par chaque appel garantit qu'aucun chemin ne les
+            # oublie.
+            default_headers=default_headers or None,
         )
 
     def _sampling(self) -> dict:
@@ -146,7 +195,7 @@ class LLMBackend:
         ]
         started = time.perf_counter()
         try:
-            payload = (
+            payload, usage = (
                 self._call_with_tool(messages, tool) if self.tool_support
                 else self._call_with_json(messages, tool)
             )
@@ -164,6 +213,10 @@ class LLMBackend:
             return None
 
         elapsed = time.perf_counter() - started
+        # Les tokens sont comptés même quand la réponse est inexploitable : un
+        # modèle qui répond à côté a quand même consommé le budget, et l'oublier
+        # ferait paraître économe le modèle le plus coûteux du panel.
+        self.stats.record_usage(usage)
         if payload is None:
             self.stats.record(elapsed, "empty")
             logger.warning("[%s] réponse vide ou non parsable", self.model)
@@ -173,7 +226,7 @@ class LLMBackend:
 
     # ── modes ───────────────────────────────────────────────────────────────
 
-    def _call_with_tool(self, messages: list[dict], tool: dict) -> dict | None:
+    def _call_with_tool(self, messages: list[dict], tool: dict) -> tuple[dict | None, object]:
         response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -182,12 +235,19 @@ class LLMBackend:
                          "function": {"name": tool["function"]["name"]}},
             **self._sampling(),
         )
+        usage = getattr(response, "usage", None)
         calls = getattr(response.choices[0].message, "tool_calls", None)
         if not calls:
-            return None
-        return json.loads(calls[0].function.arguments)
+            return None, usage
+        try:
+            return json.loads(calls[0].function.arguments), usage
+        except json.JSONDecodeError:
+            # Un tool call dont les arguments ne sont pas du JSON valide : rare,
+            # mais c'est une panne de FORME du modèle, pas du réseau. La compter
+            # comme une réponse vide la range au bon endroit dans les métriques.
+            return None, usage
 
-    def _call_with_json(self, messages: list[dict], tool: dict) -> dict | None:
+    def _call_with_json(self, messages: list[dict], tool: dict) -> tuple[dict | None, object]:
         schema = tool["function"].get("parameters", {})
         messages = list(messages)
         messages[-1] = {
@@ -200,19 +260,20 @@ class LLMBackend:
         response = self._client.chat.completions.create(
             model=self.model, messages=messages, **self._sampling(),
         )
+        usage = getattr(response, "usage", None)
         content = (response.choices[0].message.content or "").strip()
         content = re.sub(r"^```(?:json)?\s*", "", content)
         content = re.sub(r"\s*```$", "", content).strip()
         if not content:
-            return None
+            return None, usage
         try:
-            return json.loads(content)
+            return json.loads(content), usage
         except json.JSONDecodeError:
             # Dernier recours : isoler le premier objet JSON du texte.
             match = re.search(r"\{.*\}", content, re.S)
             if not match:
-                return None
+                return None, usage
             try:
-                return json.loads(match.group())
+                return json.loads(match.group()), usage
             except json.JSONDecodeError:
-                return None
+                return None, usage

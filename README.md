@@ -33,6 +33,60 @@ lisibles. On cache les **coefficients**, jamais les **causes**.
 pip install -r requirements.txt
 ```
 
+## Brancher un fournisseur de modèles
+
+Le backend est un client **OpenAI-compatible générique** : ajouter un
+fournisseur, c'est ajouter deux variables d'environnement, jamais du code.
+
+```bash
+cp .env.example .env
+```
+
+Le défaut est **OpenRouter** — une seule clé donne accès aux modèles de tous les
+éditeurs derrière la même API, ce qui est exactement ce que demande un banc qui
+*compare* des modèles.
+
+Avant toute campagne, vérifier le registre contre le catalogue réel du
+fournisseur :
+
+```bash
+python -m controla.cli models --check
+```
+
+La commande répond trois choses, et sort en code 1 si l'une cloche : le modèle
+**existe-t-il**, à **quel prix** (avec le coût extrapolé d'une campagne), et
+**accepte-t-il les réglages déclarés**.
+
+Ce troisième point n'est pas cosmétique. Plusieurs modèles récents refusent
+`temperature` ; le paramètre est alors ignoré **en silence**. Un panel où la
+moitié des sièges joue à 0.7 et l'autre au défaut du fournisseur mesure le
+réglage autant que le modèle. D'où les `temperature: null` explicites de
+`models.yaml`, et une commande qui les vérifie plutôt que de les croire.
+
+## Interface web
+
+```bash
+python -m controla.cli ui
+```
+
+Trois usages d'un même moteur, sur `http://127.0.0.1:8000` :
+
+* **replay** — rejouer une partie tour par tour : carte, factions, événements
+  datés de leur cause, batailles, et le raisonnement de chaque dieu LLM ;
+* **campagne** — classement OpenSkill, les cinq métriques §12, les trois
+  critères §13 ;
+* **jouer** — prendre un siège soi-même contre le panel scripté ou contre des
+  modèles. Une partie jouée à la main n'entre dans aucun classement : elle sert
+  à sentir l'équilibrage de l'intérieur.
+
+Le serveur est **local et sans authentification** — aucun chemin hors du dossier
+servi n'est lisible, mais ne l'exposez pas pour autant.
+
+La carte d'un replay vient d'un **instantané enregistré**, pas d'une
+reconstruction à partir des événements : une déduction diverge en silence le
+jour où une règle nouvelle oublie son événement. Les campagnes en portent
+d'office ; pour une partie isolée, `play --snapshots`.
+
 ## Utilisation
 
 Le règlement complet, **dérivé des seuls descripteurs** — c'est aussi la partie
@@ -51,7 +105,7 @@ python -m controla.cli play --seed 42 --policies cooperator,betrayer,expansionis
 Stocker une partie puis la rejouer :
 
 ```bash
-python -m controla.cli play --seed 42 --out runs/game.json --journal
+python -m controla.cli play --seed 42 --out runs/game.json --journal --snapshots
 ```
 
 ```bash
@@ -119,8 +173,9 @@ controla/
 ├── env/              ControlaEnv (AEC), observation avec brouillard, reward
 ├── policies/         interface · archétypes scriptés · policies LLM
 ├── arena/            play_match · tournoi · OpenSkill · métriques · sweep · JSONL
-├── replay/           rendu texte d'un état, d'une partie, d'un classement, d'un sweep
-├── cli.py            describe · play · tournament · sweep · replay
+├── replay/           rendu texte · instantanés de plateau pour la restitution
+├── ui/               serveur web local : bibliothèque, replay, campagnes, jeu
+├── cli.py            describe · play · tournament · sweep · replay · models · ui
 └── ../configs/       plans de calibration (§13)
 ```
 
@@ -157,7 +212,7 @@ dieu ne change **rien** pour les autres.
 pytest
 ```
 
-272 tests, ~2 min. Le filet est conçu pour rester vert pendant l'équilibrage : les
+305 tests, ~70 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
 invariants sont indépendants des constantes, donc un sweep qui les casse a cassé le
 moteur et non l'équilibre.
 
@@ -174,6 +229,9 @@ moteur et non l'équilibre.
 | `test_arena.py` | JSONL relisible, ordinal `μ − 3σ`, rotation des sièges, campagne reproductible |
 | `test_archetypes.py` | le panel joue ce qu'il déclare : effets signés, zéro nom d'action en dur |
 | `test_sweep.py` | plan sans doublon, constante inconnue refusée, critères §13 chiffrés |
+| `test_snapshot.py` | l'instantané de replay **est** l'état joué, case par case · glyphes distincts |
+| `test_ui.py` | confinement des chemins servis, session jouable rejouable, audit de modèles qui mord |
+| `test_llm_backend.py` | tokens comptés même sur réponse inexploitable, réglage `null` non envoyé |
 
 ## État d'avancement
 
@@ -183,7 +241,8 @@ moteur et non l'équilibre.
 - [x] **T3** — négociation, engagements, réputation publique
 - [x] **T4** — tournoi, classement OpenSkill `μ − 3σ`, les cinq métriques §12
 - [x] **T5** — boucle de calibration : les trois critères §13 atteints
-- [ ] **T6** — restitution : replay, graphes, un finding net
+- [~] **T6** — restitution : interface web (replay, campagnes, jeu) et audit de
+  fournisseur en place ; **reste le finding net** sur des modèles réels
 
 ### Les trois critères de calibration (§13)
 

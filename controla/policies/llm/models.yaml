@@ -1,6 +1,6 @@
 # Registre des modèles assignables à un siège.
 #
-# Chaque entrée associe un nom de modèle (transmis tel quel à l'API) à :
+# Chaque entrée associe un nom de modèle (transmis TEL QUEL à l'API) à :
 #   provider      → sert à lire {PROVIDER}_BASE_URL et {PROVIDER}_API_KEY dans
 #                   l'environnement (voir .env.example)
 #   tool_support  → true si le fournisseur gère le tool calling ; false bascule
@@ -8,19 +8,87 @@
 #
 # Réglages d'inférence optionnels, par modèle (sinon les défauts de
 # config/default.yaml → llm) : temperature, max_tokens, timeout, seed, max_retries.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# `temperature: null` N'EST PAS UN DÉTAIL DE CONFIG.
+#
+# Plusieurs modèles récents (famille gpt-5, Claude par la couche OpenAI) ne
+# prennent plus de paramètre d'échantillonnage. Envoyer `temperature: 0.7` à
+# ceux-là et à leurs concurrents produirait un classement où une partie du panel
+# joue à 0.7 et l'autre au défaut du fournisseur : on mesurerait le réglage
+# autant que le modèle. `null` supprime l'envoi du paramètre, ce qui est le seul
+# état commun à tous.
+#
+# La colonne est vérifiable, elle n'est pas déclarative :
+#   python -m controla.cli models --check
+# interroge /models chez le fournisseur et signale tout écart entre ce qui est
+# déclaré ici et ce que le modèle accepte réellement.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Prix relevés le 2026-08-06 via l'API OpenRouter, en dollars par million de
+# tokens (entrée / sortie). Ils bougent : `models --check` les rafraîchit.
 
-llama-3.3-70b-versatile:
-  provider: groq
+# ── Panel « petits et rapides » ──────────────────────────────────────────────
+# La cible annoncée : faible latence, coût compatible avec une campagne de
+# plusieurs centaines de parties. Une partie à 4 sièges LLM coûte ~180 000
+# tokens (FINDINGS n° 5), soit ~1 ct à 0.05 $/Mtok et ~0.20 $ à 1.00 $/Mtok.
+
+qwen/qwen3.7-flash:                     # 0.030 / 0.130
+  provider: openrouter
   tool_support: true
 
-openai/gpt-oss-120b:
-  provider: groq
+openai/gpt-oss-120b:                    # 0.037 / 0.170
+  provider: openrouter
   tool_support: true
 
-gpt-4o-mini:
-  provider: openai
+openai/gpt-5-nano:                      # 0.050 / 0.400
+  provider: openrouter
+  tool_support: true
+  temperature: null                     # famille gpt-5 : paramètre refusé
+
+z-ai/glm-4.7-flash:                     # 0.060 / 0.400
+  provider: openrouter
   tool_support: true
 
-claude-sonnet-4-6:
-  provider: anthropic
+mistralai/mistral-small-3.2-24b-instruct:   # 0.094 / 0.250
+  provider: openrouter
   tool_support: true
+
+google/gemini-2.5-flash-lite:           # 0.100 / 0.400
+  provider: openrouter
+  tool_support: true
+
+openai/gpt-4.1-mini:                    # 0.400 / 1.600
+  provider: openrouter
+  tool_support: true
+
+anthropic/claude-haiku-4.5:             # 1.000 / 5.000
+  provider: openrouter
+  tool_support: true
+  seed: null                            # non supporté par ce modèle
+
+# ── Ancres ───────────────────────────────────────────────────────────────────
+# Un banc de petits modèles a besoin d'un plafond connu : sans lui, on ne sait
+# pas si un écart de 10 points d'ordinal est beaucoup ou peu. Ces deux-là ne
+# servent qu'à cadrer l'échelle, pas à peupler les campagnes — ils coûtent
+# 20 à 50 fois le reste du panel.
+
+anthropic/claude-sonnet-5:              # 2.000 / 10.000
+  provider: openrouter
+  tool_support: true
+  temperature: null                     # paramètre refusé
+  seed: null
+
+openai/gpt-5.2:                         # 1.750 / 14.000
+  provider: openrouter
+  tool_support: true
+  temperature: null                     # famille gpt-5 : paramètre refusé
+
+# ── Développement local, palier gratuit ──────────────────────────────────────
+# Groq plafonne à ~100 000 tokens/jour : une seule partie complète l'épuise
+# (FINDINGS n° 5). Utile pour dérouler la boucle sans payer, inutilisable pour
+# une campagne. Décommenter après avoir renseigné GROQ_* dans `.env`.
+#
+# llama-3.3-70b-versatile:
+#   provider: groq
+#   tool_support: true

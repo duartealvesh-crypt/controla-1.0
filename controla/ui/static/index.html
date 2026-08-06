@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controla — arène god-4X</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Controla</h1>
+  <nav id="tabs">
+    <button data-view="library" class="on">Bibliothèque</button>
+    <button data-view="replay">Replay</button>
+    <button data-view="campaign">Campagne</button>
+    <button data-view="play">Jouer</button>
+    <button data-view="models">Modèles</button>
+  </nav>
+  <span id="status"></span>
+</header>
+
+<main>
+
+<!-- ═══ Bibliothèque ═══════════════════════════════════════════════════ -->
+<section id="view-library" class="view on">
+  <p class="hint">Racine servie : <code id="root-path">—</code></p>
+  <h2>Campagnes</h2>
+  <div id="runs-list" class="cards"></div>
+  <h2>Parties isolées</h2>
+  <div id="loose-list" class="cards"></div>
+</section>
+
+<!-- ═══ Replay ════════════════════════════════════════════════════════ -->
+<section id="view-replay" class="view">
+  <div id="replay-empty" class="hint">
+    Choisissez une partie dans la <a href="#" data-goto="library">bibliothèque</a>.
+    <br><br>
+    Une partie n'affiche sa carte que si elle a été jouée avec les instantanés
+    (<code>play --snapshots</code>, ou n'importe quelle campagne). Les parties
+    plus anciennes restent lisibles&nbsp;: seuls la carte et les courbes manquent.
+  </div>
+  <div id="replay-body" class="hidden">
+    <div class="toolbar">
+      <button id="rp-first" title="Premier tour">⏮</button>
+      <button id="rp-prev" title="Tour précédent">◀</button>
+      <button id="rp-play" title="Lecture">▶</button>
+      <button id="rp-next" title="Tour suivant">▶|</button>
+      <button id="rp-last" title="Dernier tour">⏭</button>
+      <input type="range" id="rp-slider" min="0" max="0" value="0">
+      <span id="rp-turn" class="mono"></span>
+      <span class="grow"></span>
+      <span id="rp-title" class="mono dim"></span>
+    </div>
+    <div class="split">
+      <div class="col-map">
+        <div id="rp-map" class="map"></div>
+        <div id="rp-legend" class="legend"></div>
+        <div id="rp-charts"></div>
+      </div>
+      <div class="col-side">
+        <div id="rp-factions"></div>
+        <h3>Ce tour-là</h3>
+        <div id="rp-events" class="feed"></div>
+        <h3>Raisonnements</h3>
+        <div id="rp-reasoning" class="feed"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Campagne ══════════════════════════════════════════════════════ -->
+<section id="view-campaign" class="view">
+  <div id="campaign-empty" class="hint">
+    Choisissez une campagne dans la <a href="#" data-goto="library">bibliothèque</a>.
+  </div>
+  <div id="campaign-body" class="hidden"></div>
+</section>
+
+<!-- ═══ Jouer ═════════════════════════════════════════════════════════ -->
+<section id="view-play" class="view">
+  <div id="play-setup">
+    <h2>Nouvelle partie</h2>
+    <p class="hint">
+      Vous prenez un siège de dieu, les trois autres sont tenus par des
+      archétypes scriptés ou par des modèles. Une partie jouée à la main
+      <strong>n'entre dans aucun classement</strong> — elle sert à sentir
+      l'équilibrage de l'intérieur.
+    </p>
+    <div class="form">
+      <label>Seed <input type="number" id="pl-seed" value="42"></label>
+      <div id="pl-seats"></div>
+      <button id="pl-start" class="primary">Commencer</button>
+    </div>
+  </div>
+  <div id="play-body" class="hidden">
+    <div class="toolbar">
+      <span id="pl-turn" class="mono"></span>
+      <span id="pl-points" class="mono"></span>
+      <span class="grow"></span>
+      <button id="pl-end">Fin de tour</button>
+      <button id="pl-save">Sauver le replay</button>
+      <button id="pl-quit">Abandonner</button>
+    </div>
+    <div class="split">
+      <div class="col-map">
+        <div id="pl-map" class="map"></div>
+        <div id="pl-legend" class="legend"></div>
+        <h3>Journal</h3>
+        <div id="pl-events" class="feed"></div>
+      </div>
+      <div class="col-side">
+        <div id="pl-self"></div>
+        <div id="pl-rivals"></div>
+        <h3>Coups légaux</h3>
+        <div id="pl-actions"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ Modèles ═══════════════════════════════════════════════════════ -->
+<section id="view-models" class="view">
+  <h2>Registre des modèles</h2>
+  <p class="hint">
+    Confronte <code>policies/llm/models.yaml</code> à ce que le fournisseur
+    expose réellement. Un identifiant périmé ou un réglage d'échantillonnage
+    refusé se voit ici, avant de coûter une campagne.
+  </p>
+  <div id="models-body">Chargement…</div>
+</section>
+
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

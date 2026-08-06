@@ -14,5 +14,9 @@ python-dotenv
 numpy
 matplotlib
 
+# Interface web (`python -m controla.cli ui`)
+fastapi
+uvicorn[standard]
+
 # Tests
 pytest

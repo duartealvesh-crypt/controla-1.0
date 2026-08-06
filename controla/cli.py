@@ -41,7 +41,10 @@ def cmd_play(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     catalog = build_catalog(cfg)
     result = play_match(
-        MatchSpec(seed=args.seed, seats=seats, journal_rng=args.journal),
+        MatchSpec(
+            seed=args.seed, seats=seats, journal_rng=args.journal,
+            snapshots=args.snapshots,
+        ),
         build_policies(seats, cfg, catalog),
         config=cfg,
     )
@@ -131,6 +134,98 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_models(args: argparse.Namespace) -> int:
+    """Confronte le registre de modèles au catalogue réel du fournisseur.
+
+    C'est la commande à passer AVANT une campagne : un identifiant périmé ou un
+    réglage d'échantillonnage refusé se paie sinon en parties jouées pour rien,
+    ou pire en classement faussé (cf. `policies/llm/catalogue.py`).
+    """
+    from controla.policies.llm.catalogue import (
+        audit,
+        campaign_cost,
+        load_provider_catalogues,
+    )
+    from controla.policies.llm.registry import load_dotenv_if_present, load_models
+
+    found = load_dotenv_if_present()
+    print(f"# .env : {found or 'aucun trouvé'}", file=sys.stderr)
+
+    declared = load_models()
+    if not declared:
+        print("aucun modèle déclaré dans policies/llm/models.yaml", file=sys.stderr)
+        return 1
+
+    if not args.check:
+        for name, entry in sorted(declared.items()):
+            print(f"  {name:46s} {entry.get('provider', '?')}")
+        return 0
+
+    catalogues, errors = load_provider_catalogues(declared)
+    for provider, message in sorted(errors.items()):
+        print(f"  ✗ {provider:14s} {message}", file=sys.stderr)
+
+    reports = audit(declared, catalogues)
+    header = f"  {'modèle':46s} {'$/Mtok in':>10s} {'$/Mtok out':>11s} {'48 parties':>11s}"
+    print(header)
+    print("  " + "─" * (len(header) - 2))
+
+    failures = 0
+    for report in reports:
+        cost = campaign_cost(report, games=args.games)
+        print(
+            f"  {report['model']:46.46s} "
+            f"{_money(report.get('price_in')):>10s} "
+            f"{_money(report.get('price_out')):>11s} "
+            f"{_money(cost, prefix='$'):>11s}"
+        )
+        for problem in report["problems"]:
+            failures += 1
+            print(f"      ✗ {problem}", file=sys.stderr)
+        for warning in report["warnings"]:
+            print(f"      ~ {warning}", file=sys.stderr)
+
+    print(
+        f"\n  Coût extrapolé pour UN siège sur {args.games} parties, à partir des "
+        "45 000 tokens/siège/partie mesurés en T2 (docs/FINDINGS.md n° 5).\n"
+        "  Il ignore le cache de prompt et la verbosité propre au modèle.",
+        file=sys.stderr,
+    )
+    return 1 if failures or errors else 0
+
+
+def _money(value, prefix: str = "") -> str:
+    """`—` quand le fournisseur ne publie pas de prix — et non `0.000`, qui
+    ferait passer un tarif inconnu pour la gratuité."""
+    return "—" if value is None else f"{prefix}{value:,.3f}"
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Lance l'interface web locale : replay, campagnes, partie jouable."""
+    try:
+        import uvicorn
+    except ImportError:                                # pragma: no cover
+        print(
+            "l'interface web demande fastapi et uvicorn :\n"
+            "  pip install fastapi 'uvicorn[standard]'",
+            file=sys.stderr,
+        )
+        return 1
+
+    from controla.ui.app import create_app
+
+    print(
+        f"Controla — http://{args.host}:{args.port}  (racine : {args.runs})\n"
+        "Serveur LOCAL et sans authentification : ne l'exposez pas.",
+        file=sys.stderr,
+    )
+    uvicorn.run(
+        create_app(root=args.runs, config_path=args.config),
+        host=args.host, port=args.port, log_level="warning",
+    )
+    return 0
+
+
 def _known_seats(raw: str) -> list[str] | None:
     """Découpe et valide une liste de sièges. `None` si l'un est inconnu."""
     from controla.policies.factory import available_seats
@@ -177,6 +272,11 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument(
         "--journal", action="store_true",
         help="journalise chaque tirage d'aléa (audit et empreinte de partie)",
+    )
+    play.add_argument(
+        "--snapshots", action="store_true",
+        help="joint la carte et l'état du plateau à chaque tour, ce qui rend la "
+             "partie rejouable dans l'interface web (`cli ui`)",
     )
     play.set_defaults(func=cmd_play)
 
@@ -228,6 +328,31 @@ def build_parser() -> argparse.ArgumentParser:
         "path", help="JSON de `play --out` ou JSONL de `tournament`",
     )
     replay.set_defaults(func=cmd_replay)
+
+    models = subparsers.add_parser(
+        "models", help="liste et vérifie le registre de modèles LLM",
+    )
+    models.add_argument(
+        "--check", action="store_true",
+        help="interroge le fournisseur : le modèle existe-t-il, à quel prix, et "
+             "accepte-t-il les réglages déclarés ? (code de sortie 1 si non)",
+    )
+    models.add_argument(
+        "--games", type=int, default=48,
+        help="nombre de parties pour l'estimation de coût (défaut : 48)",
+    )
+    models.set_defaults(func=cmd_models)
+
+    ui = subparsers.add_parser(
+        "ui", help="interface web locale : replay, campagnes, partie jouable",
+    )
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--port", type=int, default=8000)
+    ui.add_argument(
+        "--runs", default="runs",
+        help="racine servie — AUCUN chemin hors de ce dossier n'est lisible",
+    )
+    ui.set_defaults(func=cmd_ui)
 
     return parser
 

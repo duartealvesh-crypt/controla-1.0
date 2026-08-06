@@ -37,6 +37,12 @@ class TurnReport:
     battles: list[dict] = field(default_factory=list)
     eliminations: list[int] = field(default_factory=list)
     per_faction: dict[int, dict] = field(default_factory=dict)
+    # Instantané du plateau à la fin de la passe, posé par l'environnement (voir
+    # `replay/snapshot.py`). La passe ne le remplit pas elle-même : elle décrit
+    # ce qui s'est PASSÉ, l'état qui en résulte est du ressort de l'appelant.
+    # Reste `None` quand la restitution n'est pas demandée — ce qui garde les
+    # 2 016 parties d'un sweep aussi légères qu'avant.
+    board: dict | None = None
 
     def add(self, *events: dict) -> None:
         self.events.extend(events)
@@ -45,13 +51,18 @@ class TurnReport:
         self.events.extend(events)
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "turn": self.turn,
             "events": self.events,
             "battles": self.battles,
             "eliminations": self.eliminations,
             "per_faction": {str(k): v for k, v in self.per_faction.items()},
         }
+        # Absent plutôt que `null` : un replay ancien et un replay sans
+        # instantané se relisent alors de la même façon.
+        if self.board is not None:
+            payload["board"] = self.board
+        return payload
 
 
 # ── 1. Effets échus ─────────────────────────────────────────────────────────
