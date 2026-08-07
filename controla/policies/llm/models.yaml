@@ -67,6 +67,27 @@ anthropic/claude-haiku-4.5:             # 1.000 / 5.000
   tool_support: true
   seed: null                            # non supporté par ce modèle
 
+# ── Palier gratuit OpenRouter ────────────────────────────────────────────────
+# Retenu au terme d'un banc sur les 14 modèles gratuits d'OpenRouter déclarant
+# `tools` + `reasoning`, mesurés sur le VRAI prompt d'un tour (~6 000 tokens
+# d'entrée), 9 appels. C'est le seul à réunir les trois exigences :
+#
+#   * `tool_choice` NOMMÉ accepté — ce que `backend._call_with_tool` force. La
+#     moitié du panel gratuit le refuse (gpt-oss-20b, gemma-4-31b), et un modèle
+#     qui le refuse ne joue pas, si rapide soit-il ;
+#   * 9 plans exploitables sur 9, et 0 index hors masque sur 30 proposés ;
+#   * raisonnement EXPOSÉ à chaque réponse (2 644 tokens médians), ce qui est la
+#     matière première du finding de T6 : sans lui on sait qui gagne, pas pourquoi.
+#
+# Latence médiane 24 s (11 à 42). Deux fois plus lent que `laguna-xs`, qui
+# n'expose aucun raisonnement — d'où l'arbitrage.
+#
+# Ni `temperature` ni `seed` ne sont neutralisés : le fournisseur les annonce tous
+# deux comme acceptés, et `models --check` le revérifie.
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free:   # 0 / 0 — gratuit
+  provider: openrouter
+  tool_support: true
+
 # ── Ancres ───────────────────────────────────────────────────────────────────
 # Un banc de petits modèles a besoin d'un plafond connu : sans lui, on ne sait
 # pas si un écart de 10 points d'ordinal est beaucoup ou peu. Ces deux-là ne

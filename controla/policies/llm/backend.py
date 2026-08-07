@@ -77,6 +77,12 @@ class CallStats:
     longueur de leur raisonnement. `cached_tokens` isole ce que le fournisseur a
     servi depuis son cache — c'est la seule façon de vérifier qu'un cache
     supposé actif l'est vraiment, plutôt que de le supposer.
+
+    `reasoning_tokens` isole de même la part de la sortie passée à réfléchir.
+    Mesuré sur `nemotron-3-nano-omni` : **95.6 % des tokens de sortie**. Sans ce
+    compteur, la seule chose visible d'un modèle à raisonnement est un
+    `completion_tokens` inexpliqué, et l'on ne peut ni distinguer un modèle
+    verbeux d'un modèle qui réfléchit, ni chiffrer une campagne.
     """
 
     calls: int = 0
@@ -85,6 +91,7 @@ class CallStats:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    reasoning_tokens: int = 0
 
     def record(self, seconds: float, error_kind: str | None = None) -> None:
         self.calls += 1
@@ -98,6 +105,11 @@ class CallStats:
         Défensif par construction : `usage` est optionnel dans la spec OpenAI et
         plusieurs passerelles l'omettent ou le nomment autrement. Un champ
         manquant doit coûter un compteur à zéro, jamais une campagne plantée.
+
+        `cached_tokens` et `reasoning_tokens` sont des VENTILATIONS, pas des
+        totaux à part : le premier est déjà compris dans `prompt_tokens`, le
+        second dans `completion_tokens`. Les additionner reviendrait à compter
+        deux fois les mêmes tokens.
         """
         if usage is None:
             return
@@ -106,6 +118,12 @@ class CallStats:
         details = getattr(usage, "prompt_tokens_details", None)
         cached = getattr(details, "cached_tokens", 0) if details is not None else 0
         self.cached_tokens += int(cached or 0)
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        reasoning = (
+            getattr(completion_details, "reasoning_tokens", 0)
+            if completion_details is not None else 0
+        )
+        self.reasoning_tokens += int(reasoning or 0)
 
     @property
     def response_rate(self) -> float:
@@ -133,6 +151,7 @@ class CallStats:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "cached_tokens": self.cached_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "cache_hit_rate": (
                 None if self.cache_hit_rate is None else round(self.cache_hit_rate, 4)
             ),

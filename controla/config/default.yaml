@@ -354,7 +354,19 @@ score:
 # pour un benchmark équitable.
 llm:
   temperature: 0.7      # > 0 pour que les répétitions varient réellement
-  max_tokens: 2048      # plafonne la réponse -> borne latence et coût
+  # [TUNE] plafonne la réponse -> borne latence et coût. Relevé de 2048 après
+  # mesure : chez un modèle à raisonnement, la réflexion est facturée en tokens de
+  # SORTIE et passe donc sous ce plafond. À 2048 le budget partait entièrement
+  # dans le raisonnement et le tool call n'était jamais émis — `finish_reason:
+  # length`, tour muet, et un modèle parfaitement capable compté comme défaillant.
+  # Mesuré sur 14 modèles gratuits d'OpenRouter, part des appels rendant un plan :
+  #   plafond              2048   4096   8192
+  #   openrouter/free        —     33 %  100 %
+  #   nemotron-3-super     —       67 %   83 %
+  #   nemotron-3-ultra     —       67 %   83 %
+  # Relever le plafond ne coûte rien en soi : on paie les tokens ÉMIS, pas le
+  # plafond. Un modèle sans raisonnement s'arrête où il s'arrêtait.
+  max_tokens: 8192
   timeout: 90.0         # secondes par requête
   seed: null            # déterminisme côté fournisseur, si supporté
   max_retries: 2        # retries SDK sur erreurs transitoires (429 / 5xx)

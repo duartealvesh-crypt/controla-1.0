@@ -24,11 +24,15 @@ TOOL = {
 }
 
 
-def _usage(prompt=0, completion=0, cached=None):
+def _usage(prompt=0, completion=0, cached=None, reasoning=None):
     details = None if cached is None else SimpleNamespace(cached_tokens=cached)
+    completion_details = (
+        None if reasoning is None else SimpleNamespace(reasoning_tokens=reasoning)
+    )
     return SimpleNamespace(
         prompt_tokens=prompt, completion_tokens=completion,
         prompt_tokens_details=details,
+        completion_tokens_details=completion_details,
     )
 
 
@@ -100,6 +104,31 @@ def test_cache_hit_rate_is_none_until_something_is_measured():
     assert stats.cache_hit_rate is None
     stats.record_usage(_usage(prompt=1000, completion=10, cached=800))
     assert stats.cache_hit_rate == 0.8
+
+
+def test_reasoning_tokens_are_counted_as_a_share_of_the_completion():
+    """Chez un modèle à raisonnement, la réflexion EST la sortie (95.6 % mesurés
+    sur nemotron-3-nano-omni). Sans ce compteur, un `completion_tokens` élevé ne
+    dit pas si le modèle est verbeux ou s'il réfléchit.
+
+    Ventilation et non total : les tokens de raisonnement sont DÉJÀ dans
+    `completion_tokens`, les additionner les compterait deux fois.
+    """
+    backend = _backend([
+        _tool_response('{"plan": []}', _usage(prompt=6000, completion=2677, reasoning=2644)),
+    ])
+    backend.complete("sys", "user", TOOL)
+
+    stats = backend.stats.to_dict()
+    assert stats["completion_tokens"] == 2677
+    assert stats["reasoning_tokens"] == 2644
+
+
+def test_a_model_without_reasoning_reports_zero_not_a_crash():
+    """`completion_tokens_details` est absent chez la plupart des fournisseurs."""
+    backend = _backend([_tool_response('{"plan": []}', _usage(prompt=10, completion=20))])
+    backend.complete("sys", "user", TOOL)
+    assert backend.stats.reasoning_tokens == 0
 
 
 def test_missing_usage_block_costs_a_counter_not_a_campaign():

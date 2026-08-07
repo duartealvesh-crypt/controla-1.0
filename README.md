@@ -212,7 +212,7 @@ dieu ne change **rien** pour les autres.
 pytest
 ```
 
-305 tests, ~70 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
+307 tests, ~70 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
 invariants sont indépendants des constantes, donc un sweep qui les casse a cassé le
 moteur et non l'équilibre.
 
