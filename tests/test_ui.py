@@ -142,6 +142,9 @@ def test_playing_out_a_session_produces_a_replayable_result():
         assert key in result, f"clé '{key}' absente du résultat"
     assert len(result["ranking"]) == 4
     assert all("board" in report for report in result["history"])
+    # Comme une partie de banc : l'état initial est là, sinon le replay d'une
+    # partie jouée à la main comptait une image de moins.
+    assert "initial_board" in result["world"]
     from controla.replay.render import render_match
     assert render_match(result)                       # ne lève pas
 

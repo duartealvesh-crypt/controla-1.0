@@ -91,7 +91,15 @@ class CallStats:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    # Tokens ÉCRITS dans le cache (facturés plus cher que l'entrée normale chez
+    # Anthropic). Sans eux, un cache qui s'écrit à chaque appel sans jamais être
+    # relu passerait pour un cache neutre, alors qu'il coûte.
+    cache_write_tokens: int = 0
     reasoning_tokens: int = 0
+    # Pourquoi chaque génération s'est arrêtée (`stop`, `tool_calls`, `length`…).
+    # `length` est le cas qui compte : le plafond de sortie a coupé le modèle,
+    # typiquement en plein raisonnement, avant qu'il n'émette son plan.
+    finish_reasons: dict[str, int] = field(default_factory=dict)
 
     def record(self, seconds: float, error_kind: str | None = None) -> None:
         self.calls += 1
@@ -118,6 +126,8 @@ class CallStats:
         details = getattr(usage, "prompt_tokens_details", None)
         cached = getattr(details, "cached_tokens", 0) if details is not None else 0
         self.cached_tokens += int(cached or 0)
+        written = getattr(details, "cache_write_tokens", 0) if details is not None else 0
+        self.cache_write_tokens += int(written or 0)
         completion_details = getattr(usage, "completion_tokens_details", None)
         reasoning = (
             getattr(completion_details, "reasoning_tokens", 0)
@@ -151,15 +161,74 @@ class CallStats:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "cached_tokens": self.cached_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
             "reasoning_tokens": self.reasoning_tokens,
+            "finish_reasons": dict(self.finish_reasons),
             "cache_hit_rate": (
                 None if self.cache_hit_rate is None else round(self.cache_hit_rate, 4)
             ),
         }
 
 
+@dataclass
+class CallOutcome:
+    """Ce que le dernier appel a laissé en dehors du plan lui-même.
+
+    Exposé à part plutôt que glissé dans le dict renvoyé par `complete()` : le
+    plan est la sortie du MODÈLE, ceci est l'observation du TRANSPORT. Les
+    mélanger obligerait chaque lecteur du plan à filtrer des clés techniques.
+    """
+
+    finish_reason: str | None = None
+    # Le raisonnement NATIF d'un modèle à réflexion (`message.reasoning` chez
+    # OpenRouter, `reasoning_content` chez DeepSeek et les serveurs vLLM). Il ne
+    # transite pas par le tool call : sans capture explicite, on en paie les
+    # tokens et on en jette le texte.
+    native_reasoning: str | None = None
+    error_kind: str | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
+
+
+def _field(block, key: str):
+    if isinstance(block, dict):
+        return block.get(key)
+    return getattr(block, key, None)
+
+
+def extract_native_reasoning(message) -> str | None:
+    """Le raisonnement natif d'un message, sous l'un des noms en usage.
+
+    Il n'y a pas de standard : chaque passerelle a choisi son champ. On les
+    essaie dans l'ordre, et `reasoning_details` (liste de blocs typés) en
+    dernier recours.
+    """
+    for name in ("reasoning", "reasoning_content"):
+        value = getattr(message, name, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    details = getattr(message, "reasoning_details", None)
+    if isinstance(details, list):
+        parts = []
+        for block in details:
+            text = _field(block, "text") or _field(block, "summary")
+            if isinstance(text, str) and text.strip():
+                parts.append(text)
+        if parts:
+            return "\n\n".join(parts)
+    return None
+
+
 class LLMBackend:
-    """Un modèle joignable. Renvoie un dict parsé, ou `None` en cas d'échec."""
+    """Un modèle joignable. Renvoie un dict parsé, ou `None` en cas d'échec.
+
+    `model` est l'identifiant ENVOYÉ à l'API ; `label` est le nom du SIÈGE, celui
+    qui apparaît dans les classements. Ils diffèrent dès qu'un même modèle est
+    déclaré en plusieurs variantes (avec et sans mémoire, par exemple) : deux
+    sièges, deux classements, un seul modèle appelé.
+    """
 
     def __init__(
         self,
@@ -173,17 +242,28 @@ class LLMBackend:
         seed: int | None = None,
         max_retries: int = 2,
         default_headers: dict[str, str] | None = None,
+        label: str | None = None,
+        cache_control: bool = False,
     ):
         if not _AVAILABLE:                            # pragma: no cover
             raise ImportError(
                 "le paquet 'openai' est requis pour les policies LLM : pip install openai"
             )
         self.model = model
+        self.label = label or model
         self.tool_support = tool_support
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.seed = seed
+        # Cache de prompt EXPLICITE (Anthropic via OpenRouter). Les fournisseurs
+        # à cache implicite (OpenAI, DeepSeek, Gemini 2.5+) n'en ont pas besoin :
+        # ils cachent tout préfixe stable au-delà de leur seuil. Le marqueur est
+        # posé à la RACINE de la requête, ce qui place le point de cache sur le
+        # dernier bloc — exactement ce qu'il faut à une conversation qui grandit
+        # par ajouts successifs.
+        self.cache_control = cache_control
         self.stats = CallStats()
+        self.last_call = CallOutcome()
         self._client = OpenAI(
             base_url=base_url, api_key=api_key, timeout=timeout, max_retries=max_retries,
             # En-têtes propres au fournisseur (attribution OpenRouter, par
@@ -196,7 +276,7 @@ class LLMBackend:
     def _sampling(self) -> dict:
         """N'envoie que les réglages définis : ne jamais forcer un paramètre qu'un
         fournisseur donné rejetterait."""
-        return {
+        options = {
             key: value
             for key, value in (
                 ("temperature", self.temperature),
@@ -205,45 +285,105 @@ class LLMBackend:
             )
             if value is not None
         }
+        if self.cache_control:
+            options["extra_body"] = {"cache_control": {"type": "ephemeral"}}
+        return options
 
-    def complete(self, system: str, user: str, tool: dict) -> dict | None:
-        """Un appel. `tool` est la définition de fonction au format OpenAI."""
+    def complete(
+        self, system: str, user: str, tool: dict, history: list[dict] | tuple = (),
+        sink: CallStats | None = None,
+    ) -> dict | None:
+        """Un appel. `tool` est la définition de fonction au format OpenAI.
+
+        `history` est la mémoire de la policy : les échanges des tours
+        précédents, insérés ENTRE le système et le message du tour. L'ordre n'est
+        pas indifférent — système puis historique forment un préfixe qui ne fait
+        que s'allonger d'un tour à l'autre, donc que le cache du fournisseur peut
+        resservir à l'identique.
+
+        `sink` reçoit les mêmes compteurs que `self.stats`. Le backend est
+        partagé sur toute une campagne — et entre deux sièges s'ils jouent le
+        même modèle — : ses compteurs sont donc CUMULÉS. La policy passe ici les
+        siens pour savoir ce que coûte SA partie, sans soustraire quoi que ce
+        soit après coup.
+        """
+        sinks = (self.stats,) if sink is None else (self.stats, sink)
         messages = [
-            {"role": "system", "content": system},
+            {"role": "system", "content": self._system(system, tool)},
+            *history,
             {"role": "user", "content": user},
         ]
+        self.last_call = CallOutcome()
         started = time.perf_counter()
         try:
-            payload, usage = (
+            payload, response = (
                 self._call_with_tool(messages, tool) if self.tool_support
-                else self._call_with_json(messages, tool)
+                else self._call_with_json(messages)
             )
         except Exception as error:                    # noqa: BLE001 — on classe puis on log
             kind = classify(error)
-            self.stats.record(time.perf_counter() - started, kind)
+            self.last_call.error_kind = kind
+            for stats in sinks:
+                stats.record(time.perf_counter() - started, kind)
             if kind == "fatal":
                 logger.error(
                     "[%s] erreur FATALE (clé, nom de modèle ou accès) — ce modèle "
                     "ne jouera jamais : %s",
-                    self.model, error,
+                    self.label, error,
                 )
             else:
-                logger.warning("[%s] erreur %s : %s", self.model, kind, error)
+                logger.warning("[%s] erreur %s : %s", self.label, kind, error)
             return None
 
         elapsed = time.perf_counter() - started
         # Les tokens sont comptés même quand la réponse est inexploitable : un
         # modèle qui répond à côté a quand même consommé le budget, et l'oublier
         # ferait paraître économe le modèle le plus coûteux du panel.
-        self.stats.record_usage(usage)
+        for stats in sinks:
+            stats.record_usage(getattr(response, "usage", None))
+        choices = getattr(response, "choices", None)
+        if choices:
+            finish = getattr(choices[0], "finish_reason", None)
+            self.last_call.finish_reason = finish
+            if finish:
+                for stats in sinks:
+                    stats.finish_reasons[finish] = stats.finish_reasons.get(finish, 0) + 1
+            self.last_call.native_reasoning = extract_native_reasoning(choices[0].message)
+
         if payload is None:
-            self.stats.record(elapsed, "empty")
-            logger.warning("[%s] réponse vide ou non parsable", self.model)
+            # « Tronqué » et « vide » appellent deux remèdes opposés : relancer
+            # un appel tronqué à l'identique le tronquera encore, alors qu'une
+            # réponse vide peut très bien ne pas se reproduire.
+            kind = "truncated" if self.last_call.truncated else "empty"
+            self.last_call.error_kind = kind
+            for stats in sinks:
+                stats.record(elapsed, kind)
+            logger.warning(
+                "[%s] réponse %s", self.label,
+                "tronquée par max_tokens" if kind == "truncated" else "vide ou non parsable",
+            )
             return None
-        self.stats.record(elapsed)
+        for stats in sinks:
+            stats.record(elapsed)
         return payload
 
     # ── modes ───────────────────────────────────────────────────────────────
+
+    def _system(self, system: str, tool: dict) -> str:
+        """Le message système effectivement envoyé.
+
+        En mode JSON, le schéma de sortie y est annexé plutôt qu'au message du
+        tour : il est identique à chaque appel, il appartient donc au préfixe
+        stable — et en mémoire, le message utilisateur rejoué au tour suivant
+        reste exactement celui qui avait été envoyé.
+        """
+        if self.tool_support:
+            return system
+        schema = tool["function"].get("parameters", {})
+        return system + (
+            "\n\nRéponds UNIQUEMENT par un objet JSON valide conforme à ce "
+            f"schéma, sans texte autour :\n{json.dumps(schema, ensure_ascii=False)}"
+        )
 
     def _call_with_tool(self, messages: list[dict], tool: dict) -> tuple[dict | None, object]:
         response = self._client.chat.completions.create(
@@ -254,45 +394,34 @@ class LLMBackend:
                          "function": {"name": tool["function"]["name"]}},
             **self._sampling(),
         )
-        usage = getattr(response, "usage", None)
         calls = getattr(response.choices[0].message, "tool_calls", None)
         if not calls:
-            return None, usage
+            return None, response
         try:
-            return json.loads(calls[0].function.arguments), usage
+            return json.loads(calls[0].function.arguments), response
         except json.JSONDecodeError:
             # Un tool call dont les arguments ne sont pas du JSON valide : rare,
             # mais c'est une panne de FORME du modèle, pas du réseau. La compter
             # comme une réponse vide la range au bon endroit dans les métriques.
-            return None, usage
+            return None, response
 
-    def _call_with_json(self, messages: list[dict], tool: dict) -> tuple[dict | None, object]:
-        schema = tool["function"].get("parameters", {})
-        messages = list(messages)
-        messages[-1] = {
-            **messages[-1],
-            "content": messages[-1]["content"] + (
-                "\n\nRéponds UNIQUEMENT par un objet JSON valide conforme à ce "
-                f"schéma, sans texte autour :\n{json.dumps(schema, ensure_ascii=False)}"
-            ),
-        }
+    def _call_with_json(self, messages: list[dict]) -> tuple[dict | None, object]:
         response = self._client.chat.completions.create(
             model=self.model, messages=messages, **self._sampling(),
         )
-        usage = getattr(response, "usage", None)
         content = (response.choices[0].message.content or "").strip()
         content = re.sub(r"^```(?:json)?\s*", "", content)
         content = re.sub(r"\s*```$", "", content).strip()
         if not content:
-            return None, usage
+            return None, response
         try:
-            return json.loads(content), usage
+            return json.loads(content), response
         except json.JSONDecodeError:
             # Dernier recours : isoler le premier objet JSON du texte.
             match = re.search(r"\{.*\}", content, re.S)
             if not match:
-                return None, usage
+                return None, response
             try:
-                return json.loads(match.group()), usage
+                return json.loads(match.group()), response
             except json.JSONDecodeError:
-                return None, usage
+                return None, response

@@ -74,8 +74,23 @@ PLAN_TOOL: dict = {
 }
 
 
-def build_system(cfg, catalog: Catalog) -> str:
-    """Le message système : le règlement, stable sur toute la partie."""
+MEMORY_NOTE = (
+    "\n\n"
+    "Mémoire : les tours précédents de cette partie figurent plus haut dans la "
+    "conversation — l'état du monde que tu as reçu à chaque tour, et le plan que "
+    "tu as rendu. Sers-t'en pour tenir une ligne, honorer ce que tu as promis et "
+    "repérer ce que font tes rivaux d'un tour à l'autre."
+)
+
+
+def build_system(cfg, catalog: Catalog, memory: bool = False) -> str:
+    """Le message système : le règlement, stable sur toute la partie.
+
+    `memory` ajoute une phrase, et une seule, annonçant que l'historique est
+    présent. Sans elle, un modèle peut lire les tours passés comme des exemples
+    plutôt que comme SA partie. Elle fait partie du traitement « avec mémoire »
+    de l'étude : la variante sans mémoire ne la reçoit jamais.
+    """
     return (
         render_rules(cfg, catalog)
         + "\n\n"
@@ -93,6 +108,7 @@ def build_system(cfg, catalog: Catalog) -> str:
         "\n"
         "Ce qui gagne des parties ici : choisir une spécialisation adaptée à tes "
         "adversaires, s'y tenir, et dévier leurs contres par la diplomatie."
+        + (MEMORY_NOTE if memory else "")
     )
 
 

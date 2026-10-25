@@ -156,9 +156,10 @@ def cmd_models(args: argparse.Namespace) -> int:
         print("aucun modèle déclaré dans policies/llm/models.yaml", file=sys.stderr)
         return 1
 
+    width = max(len(name) for name in declared) + 2
     if not args.check:
         for name, entry in sorted(declared.items()):
-            print(f"  {name:46s} {entry.get('provider', '?')}")
+            print(f"  {name:{width}s} {entry.get('provider', '?'):12s} {_flags(entry)}")
         return 0
 
     catalogues, errors = load_provider_catalogues(declared)
@@ -166,7 +167,10 @@ def cmd_models(args: argparse.Namespace) -> int:
         print(f"  ✗ {provider:14s} {message}", file=sys.stderr)
 
     reports = audit(declared, catalogues)
-    header = f"  {'modèle':46s} {'$/Mtok in':>10s} {'$/Mtok out':>11s} {'48 parties':>11s}"
+    header = (
+        f"  {'siège':{width}s} {'$/Mtok in':>10s} {'$/Mtok out':>11s} "
+        f"{f'{args.games} parties':>11s}  options"
+    )
     print(header)
     print("  " + "─" * (len(header) - 2))
 
@@ -174,10 +178,11 @@ def cmd_models(args: argparse.Namespace) -> int:
     for report in reports:
         cost = campaign_cost(report, games=args.games)
         print(
-            f"  {report['model']:46.46s} "
+            f"  {report['model']:{width}s} "
             f"{_money(report.get('price_in')):>10s} "
             f"{_money(report.get('price_out')):>11s} "
-            f"{_money(cost, prefix='$'):>11s}"
+            f"{_money(cost, prefix='$'):>11s}  "
+            f"{_flags(declared.get(report['model'], {}))}"
         )
         for problem in report["problems"]:
             failures += 1
@@ -192,6 +197,96 @@ def cmd_models(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 1 if failures or errors else 0
+
+
+def cmd_bench(args: argparse.Namespace) -> int:
+    """Mesure des modèles candidats sur les vrais prompts, au premier essai."""
+    import time as _time
+
+    from controla.policies.llm import bench
+    from controla.policies.llm.registry import load_dotenv_if_present, load_models
+
+    load_dotenv_if_present()
+    cfg = load_config(args.config)
+    catalog = build_catalog(cfg)
+
+    if args.models:
+        models = [name.strip() for name in args.models.split(",") if name.strip()]
+    else:
+        print("# découverte des modèles gratuits (données publiques OpenRouter)…",
+              file=sys.stderr)
+        found = bench.discover_free_candidates(min_uptime=args.min_uptime)
+        for entry in found:
+            uptime = "—" if entry["uptime_1d"] is None else f"{entry['uptime_1d']:.0f} %"
+            print(f"  {entry['id']:56s} dispo 24 h {uptime:>6s}  "
+                  f"sortie max {entry['max_completion_tokens'] or '—'}", file=sys.stderr)
+        models = [entry["id"] for entry in found]
+    if not models:
+        print("aucun modèle à mesurer", file=sys.stderr)
+        return 1
+
+    probes = bench.build_probes(
+        cfg, catalog,
+        seeds=[int(s) for s in args.seeds.split(",")],
+        turns=[int(t) for t in args.turns.split(",")],
+    )
+    total = bench.plan_size(models, probes)
+    minutes = total / args.rpm if args.rpm else 0
+    print(
+        f"\nbanc : {len(models)} modèles × {len(probes)} sondes = {total} requêtes, "
+        f"~{minutes:.0f} min au rythme de {args.rpm:g}/min.\n"
+        f"Quota gratuit OpenRouter : {bench.FREE_REQUESTS_PER_DAY}/jour sans crédit "
+        "acheté, 1 000/jour après 10 $ de crédits.",
+        file=sys.stderr,
+    )
+    if args.dry_run:
+        for probe in probes:
+            print(f"  sonde {probe.label:22s} {probe.points} pts, "
+                  f"{len(probe.costs)} coups légaux", file=sys.stderr)
+        return 0
+
+    declared = load_models()
+    backends = {name: bench.make_backend(name, cfg, declared.get(name)) for name in models}
+
+    def progress(name, probe, call):
+        state = ("✓" if call["well_formed"] else "✗") + (f" {call['error']}" if call["error"] else "")
+        print(f"  {name:56.56s} {probe.label:20s} {call['latency']:6.1f} s  {state}",
+              file=sys.stderr)
+
+    summaries = bench.rank(bench.run_bench(backends, probes, args.rpm, on_call=progress))
+
+    out = Path(args.out or f"runs/bench/{_time.strftime('%Y%m%d-%H%M%S')}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({
+        "models": models, "probes": [p.label for p in probes],
+        "max_tokens": cfg.llm.max_tokens, "results": summaries,
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    pct = lambda v: "—" if v is None else f"{v:.0%}"          # noqa: E731
+    sec = lambda v: "—" if v is None else f"{v:.1f} s"        # noqa: E731
+    width = max(len(s["model"]) for s in summaries) + 2
+    print(f"\n  {'modèle':{width}s} {'répond':>7s} {'forme':>6s} {'légal':>6s} "
+          f"{'budget':>7s} {'latence':>8s} {'max':>7s} {'sortie':>7s}  erreurs")
+    for s in summaries:
+        errors = ", ".join(f"{k}×{v}" for k, v in s["errors"].items()) or "—"
+        print(f"  {s['model']:{width}s} {pct(s['answered']):>7s} {pct(s['well_formed']):>6s} "
+              f"{pct(s['legal_rate']):>6s} {pct(s['within_budget']):>7s} "
+              f"{sec(s['latency_median']):>8s} {sec(s['latency_max']):>7s} "
+              f"{s['completion_tokens']:>7d}  {errors}")
+    print(f"\n  détail par appel : {out}", file=sys.stderr)
+    return 0
+
+
+def _flags(entry: dict) -> str:
+    """Les options qui changent le TRAITEMENT d'un siège, à voir d'un coup d'œil."""
+    flags = []
+    if entry.get("model"):
+        flags.append(f"→ {entry['model']}")
+    if entry.get("memory"):
+        flags.append("mémoire")
+    if entry.get("cache_control"):
+        flags.append("cache explicite")
+    return "  ".join(flags)
 
 
 def _money(value, prefix: str = "") -> str:
@@ -342,6 +437,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="nombre de parties pour l'estimation de coût (défaut : 48)",
     )
     models.set_defaults(func=cmd_models)
+
+    bench_parser = subparsers.add_parser(
+        "bench",
+        help="mesure des modèles sur les vrais prompts : forme, légalité, budget, latence",
+    )
+    bench_parser.add_argument(
+        "--models", default=None,
+        help="identifiants à mesurer, séparés par des virgules (défaut : découverte "
+             "automatique des modèles gratuits jouables d'OpenRouter)",
+    )
+    bench_parser.add_argument("--seeds", default="1", help="seeds des parties sondes")
+    bench_parser.add_argument(
+        "--turns", default="0,6,12", help="tours sondés (début, milieu, fin de partie)",
+    )
+    bench_parser.add_argument(
+        "--min-uptime", type=float, default=90.0,
+        help="disponibilité 24 h minimale pour la découverte, en %% (défaut : 90)",
+    )
+    bench_parser.add_argument(
+        "--rpm", type=float, default=20.0,
+        help="requêtes par minute (palier gratuit OpenRouter : 20)",
+    )
+    bench_parser.add_argument("--out", default=None, help="JSON de résultats")
+    bench_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="annonce les modèles, les sondes et le nombre de requêtes, sans appel",
+    )
+    bench_parser.set_defaults(func=cmd_bench)
 
     ui = subparsers.add_parser(
         "ui", help="interface web locale : replay, campagnes, partie jouable",

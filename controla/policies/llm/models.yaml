@@ -67,7 +67,44 @@ anthropic/claude-haiku-4.5:             # 1.000 / 5.000
   tool_support: true
   seed: null                            # non supporté par ce modèle
 
+# ── Modèle de TEST (gratuit) ─────────────────────────────────────────────────
+# Retenu par `cli bench` le 2026-10-25 (runs/bench/2026-10-25-free.json) : 12
+# modèles gratuits, 6 sondes réelles chacun, premier essai, sans relance.
+#
+#   modèle                     répond  légal  budget  latence médiane / max
+#   dots-3-note-preview          6/6   100 %  100 %     26 s / 53 s
+#   nemotron-3.5-lightning       6/6   100 %  100 %     60 s / 187 s
+#   nemotron-3.5-super-vl        6/6   100 %  100 %     69 s / 191 s
+#   cohere/north-mini-code       6/6   100 %  100 %    111 s / 156 s
+#   nemotron-3-ultra-550b        5/6   100 %  100 %     32 s / 118 s
+#
+# Le seul à être à la fois toujours disponible, toujours conforme, et 2 à 4 fois
+# plus rapide que les autres modèles fiables. Joue activement (4-5 coups par
+# tour) et EXPOSE son raisonnement interne (~80 % de sa sortie). Gemma, Liquid,
+# xing et laguna-xs répondaient 429 la plupart du temps : quota partagé du
+# fournisseur saturé, pas le nôtre.
+#
+# « preview » : il peut disparaître du gratuit. Remplaçant mesuré :
+# nvidia/nemotron-3.5-lightning:free (aussi fiable, ~2× plus lent). Refaire le
+# banc avant de remplacer : `python -m controla.cli bench`.
+dots-studio/dots-3-note-preview:free:   # 0 / 0 — gratuit
+  provider: openrouter
+  tool_support: true
+
+dots-studio/dots-3-note-preview:free@memoire:
+  model: dots-studio/dots-3-note-preview:free
+  provider: openrouter
+  tool_support: true
+  memory: true
+
+nvidia/nemotron-3.5-lightning:free:     # remplaçant — 0 / 0
+  provider: openrouter
+  tool_support: true
+
 # ── Palier gratuit OpenRouter ────────────────────────────────────────────────
+# ⚠ 2026-10-25 : nemotron-3-nano-omni n'était disponible que 23 % du temps sur
+# 24 h (10 % sur 30 min). Gardé pour mémoire ; préférer le modèle de test
+# ci-dessus.
 # Retenu au terme d'un banc sur les 14 modèles gratuits d'OpenRouter déclarant
 # `tools` + `reasoning`, mesurés sur le VRAI prompt d'un tour (~6 000 tokens
 # d'entrée), 9 appels. C'est le seul à réunir les trois exigences :
@@ -87,6 +124,62 @@ anthropic/claude-haiku-4.5:             # 1.000 / 5.000
 nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free:   # 0 / 0 — gratuit
   provider: openrouter
   tool_support: true
+
+# ── Étude mémoire : le même modèle, avec et sans mémoire ────────────────────
+# Une VARIANTE est un siège à part qui appelle le même modèle (`model:`). Les
+# deux variantes sont classées séparément — c'est l'expérience : opposer un
+# modèle à lui-même, la mémoire étant la seule différence.
+#
+#   python -m controla.cli tournament --seeds 1,2,3,4,5,6 \
+#     --policies openai/gpt-5-nano,openai/gpt-5-nano@memoire,cooperator,turtle
+#
+# `memory: true` rejoue à chaque tour la conversation des tours précédents
+# (~15 000 tokens d'entrée en fin de partie). Elle ne fait que s'allonger : son
+# préfixe est donc cachable, et c'est ce qui rend l'étude abordable.
+#
+# Cache de prompt, selon le fournisseur :
+#   * OpenAI, DeepSeek, Gemini 2.5+ : IMPLICITE dès 1 024 tokens de préfixe
+#     stable. Rien à déclarer. Le système (~2 400 tokens) se cache dans les
+#     deux variantes ; l'historique en plus dans la variante à mémoire.
+#   * Anthropic : EXPLICITE — `cache_control: true` pose le point de cache. Le
+#     seuil de Haiku 4.5 est de 4 096 tokens : sans mémoire le prompt reste
+#     sous le seuil et ne se cache jamais, avec mémoire il le franchit vers le
+#     3e tour. L'écart de COÛT entre les deux variantes mesure donc la mémoire
+#     ET le cache ; l'écart de JEU, lui, ne mesure que la mémoire.
+#
+# `cached_tokens` et `cache_write_tokens` sont relevés dans chaque partie
+# (policy_reports → backend) : vérifier que le cache prend, plutôt que le
+# supposer.
+
+openai/gpt-5-nano@memoire:
+  model: openai/gpt-5-nano
+  provider: openrouter
+  tool_support: true
+  temperature: null                     # famille gpt-5 : paramètre refusé
+  memory: true
+
+anthropic/claude-haiku-4.5@cache:
+  model: anthropic/claude-haiku-4.5
+  provider: openrouter
+  tool_support: true
+  seed: null
+  cache_control: true
+
+anthropic/claude-haiku-4.5@memoire:
+  model: anthropic/claude-haiku-4.5
+  provider: openrouter
+  tool_support: true
+  seed: null
+  cache_control: true
+  memory: true
+
+# Gratuit : pour dérouler l'étude de bout en bout sans payer, avant de la
+# lancer sur des modèles facturés.
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free@memoire:
+  model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+  provider: openrouter
+  tool_support: true
+  memory: true
 
 # ── Ancres ───────────────────────────────────────────────────────────────────
 # Un banc de petits modèles a besoin d'un plafond connu : sans lui, on ne sait

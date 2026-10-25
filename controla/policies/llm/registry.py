@@ -92,10 +92,61 @@ def provider_credentials(provider: str) -> tuple[str, str]:
     return values                                     # type: ignore[return-value]
 
 
+# Les clés qu'une entrée de `models.yaml` peut porter. Toute autre clé est une
+# ERREUR, pas un avertissement : `memroy: true` serait sinon ignoré en silence,
+# et l'étude mémoire comparerait deux variantes… sans mémoire.
+ENTRY_KEYS = frozenset({
+    "provider", "tool_support", "model", "memory", "cache_control",
+    "temperature", "max_tokens", "timeout", "seed", "max_retries",
+})
+
+
+def api_model(seat: str, entry: dict) -> str:
+    """L'identifiant envoyé à l'API. Par défaut, le nom du siège lui-même.
+
+    Le champ `model` permet de déclarer plusieurs SIÈGES pour un même modèle —
+    `openai/gpt-5-nano` et `openai/gpt-5-nano@memoire` — qui seront classés
+    séparément tout en appelant la même chose.
+    """
+    return str(entry.get("model") or seat)
+
+
+def validate_entry(seat: str, entry: dict) -> None:
+    unknown = set(entry) - ENTRY_KEYS
+    if unknown:
+        raise ValueError(
+            f"models.yaml, '{seat}' : clé(s) inconnue(s) {sorted(unknown)} — "
+            f"admises : {sorted(ENTRY_KEYS)}"
+        )
+    if "provider" not in entry:
+        raise ValueError(f"models.yaml, '{seat}' : `provider` manquant")
+    for flag in ("memory", "cache_control", "tool_support"):
+        if flag in entry and not isinstance(entry[flag], bool):
+            raise ValueError(
+                f"models.yaml, '{seat}' : `{flag}` doit valoir true ou false, "
+                f"reçu {entry[flag]!r}"
+            )
+
+
+def memory_enabled(entry: dict, cfg=None) -> bool:
+    """Mémoire inter-tours d'un siège : l'entrée prime, sinon le défaut global."""
+    if "memory" in entry:
+        return bool(entry["memory"])
+    try:
+        return bool(cfg.llm.memory) if cfg is not None else False
+    except AttributeError:
+        return False
+
+
 def get_backend(
     model_name: str, models: dict[str, dict], cache: dict[str, LLMBackend], cfg=None
 ) -> LLMBackend:
-    """Backend d'un modèle, créé à la première demande puis réutilisé."""
+    """Backend d'un siège, créé à la première demande puis réutilisé.
+
+    Mis en cache par SIÈGE et non par identifiant API : deux variantes d'un même
+    modèle ont chacune leurs statistiques d'appel, sans quoi on ne pourrait pas
+    comparer ce que la mémoire coûte en tokens.
+    """
     if model_name in cache:
         return cache[model_name]
     if model_name not in models:
@@ -104,6 +155,7 @@ def get_backend(
         )
 
     entry = models[model_name]
+    validate_entry(model_name, entry)
     base_url, api_key = provider_credentials(entry["provider"])
     defaults = cfg.llm if cfg is not None else None
 
@@ -116,7 +168,9 @@ def get_backend(
     backend = LLMBackend(
         base_url=base_url,
         api_key=api_key,
-        model=model_name,
+        model=api_model(model_name, entry),
+        label=model_name,
+        cache_control=bool(entry.get("cache_control", False)),
         tool_support=bool(entry.get("tool_support", True)),
         timeout=float(setting("timeout", 60.0)),
         temperature=setting("temperature", 0.7),

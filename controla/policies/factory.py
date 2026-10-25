@@ -35,13 +35,17 @@ def build_policies(
             get_backend,
             load_dotenv_if_present,
             load_models,
+            memory_enabled,
         )
 
         if models is None:
             load_dotenv_if_present()
             models = load_models()
         policies.append(
-            LLMPolicy(get_backend(name, models, cache, cfg), cfg, catalog)
+            LLMPolicy(
+                get_backend(name, models, cache, cfg), cfg, catalog,
+                memory=memory_enabled(models.get(name, {}), cfg),
+            )
         )
     return policies
 

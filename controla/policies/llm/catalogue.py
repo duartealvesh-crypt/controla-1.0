@@ -26,7 +26,12 @@ import json
 import urllib.error
 import urllib.request
 
-from controla.policies.llm.registry import provider_credentials, provider_headers
+from controla.policies.llm.registry import (
+    api_model,
+    provider_credentials,
+    provider_headers,
+    validate_entry,
+)
 
 # Réglages d'inférence que `models.yaml` peut porter et qui sont susceptibles
 # d'être refusés par un modèle donné. `max_tokens` et `timeout` n'y sont pas :
@@ -73,15 +78,27 @@ def _price(entry: dict, key: str) -> float | None:
 
 
 def audit_model(name: str, declared: dict, catalogue: dict[str, dict]) -> dict:
-    """Confronte une entrée de `models.yaml` au catalogue du fournisseur."""
-    entry = catalogue.get(name)
+    """Confronte une entrée de `models.yaml` au catalogue du fournisseur.
+
+    `name` est le SIÈGE ; l'identifiant cherché dans le catalogue est celui que
+    l'API recevra (`model:` d'une variante, sinon le siège lui-même).
+    """
+    target = api_model(name, declared)
+    entry = catalogue.get(target)
     report: dict = {
         "model": name,
+        "api_model": target,
         "provider": declared.get("provider"),
+        "memory": bool(declared.get("memory", False)),
+        "cache_control": bool(declared.get("cache_control", False)),
         "known": entry is not None,
         "problems": [],
         "warnings": [],
     }
+    try:
+        validate_entry(name, declared)
+    except ValueError as error:
+        report["problems"].append(str(error))
     if entry is None:
         # Sans catalogue on ne peut pas conclure : `catalogue` vide veut dire
         # « endpoint muet », pas « modèle inexistant ». Mais l'absence de

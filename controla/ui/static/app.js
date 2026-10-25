@@ -56,7 +56,7 @@ function el(tag, attrs = {}, ...children) {
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
     else if (value !== null && value !== undefined) node.setAttribute(key, value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
@@ -185,7 +185,11 @@ function gotoFrame(index) {
     $('#rp-charts').replaceChildren();
   }
   renderEvents($('#rp-events'), frame.report);
-  renderReasoning($('#rp-reasoning'), frame.turn);
+  // Les actions affichées à l'image N ont été décidées au tour N−1 (elles ne
+  // s'appliquent qu'à la barrière, puis la passe fait passer au tour N). Le
+  // raisonnement montré à côté doit donc être celui du tour N−1 — sans quoi on
+  // lit une justification à côté d'actions qu'elle n'a pas produites.
+  renderReasoning($('#rp-reasoning'), frame.turn - 1);
 }
 
 function names(game) {
@@ -283,6 +287,27 @@ function renderFactions(container, world, board, ranking) {
 
 /* ── Événements ───────────────────────────────────────────────────────── */
 
+/* La cible d'une action, en clair. Trois formes coexistent dans les
+ * événements : un identifiant de faction, une case [x, y], et pour une
+ * négociation le triplet [partenaire, engagement, victime]. */
+function describeTarget(target, who) {
+  if (target === null || target === undefined) return '';
+  const tinted = (id) => el('span', { class: `f-text-${id}` }, who(id));
+  if (typeof target === 'number') return [' → ', tinted(target)];
+  if (Array.isArray(target) && target.length === 2) return ` → case (${target[0]},${target[1]})`;
+  if (Array.isArray(target) && target.length === 3) {
+    const [partner, commitment, victim] = target;
+    const parts = [' → ', tinted(partner)];
+    if (commitment && commitment !== 'none') {
+      parts.push(` [${commitment.replace('_', ' ')}`);
+      if (typeof victim === 'number' && victim >= 0) parts.push(' contre ', tinted(victim));
+      parts.push(']');
+    }
+    return parts;
+  }
+  return ` → ${JSON.stringify(target)}`;
+}
+
 function renderEvents(container, report) {
   container.replaceChildren();
   if (!report) {
@@ -302,9 +327,9 @@ function renderEvents(container, report) {
     switch (event.kind) {
       case 'divine_action': {
         const effects = (event.effects || []).map((e) => e.effect).join(', ');
-        rows.push(['✦ ', tinted(actor, who(actor)), ` : ${event.action}`,
-          event.target !== null && event.target !== undefined
-            ? ` → ${JSON.stringify(event.target)}` : '',
+        rows.push(['✦ ', tinted(actor, who(actor)),
+          ` : ${state.ctx.labels[event.action] || event.action}`,
+          describeTarget(event.target, who),
           effects ? el('span', { class: 'cause' }, `  [${effects}]`) : '']);
         break;
       }
@@ -379,27 +404,54 @@ function renderEvents(container, report) {
   for (const row of rows) container.append(el('div', { class: 'row' }, row));
 }
 
-function renderReasoning(container, turn) {
+function renderReasoning(container, decisionTurn) {
   container.replaceChildren();
   const reports = (state.game || {}).policy_reports || {};
+  if (!Object.keys(reports).length) {
+    container.append(el('div', { class: 'empty' },
+      'Partie sans siège LLM — pas de raisonnement à montrer.'));
+    return;
+  }
+  if (decisionTurn < 0) {
+    container.append(el('div', { class: 'empty' },
+      'État initial. Les décisions du tour 0 apparaissent à l\'image suivante, ' +
+      'à côté des actions qu\'elles ont produites.'));
+    return;
+  }
   let found = 0;
   for (const [agent, report] of Object.entries(reports)) {
     for (const entry of report.reasonings || []) {
-      if (entry.turn !== turn) continue;
+      if (entry.turn !== decisionTurn) continue;
       found += 1;
+      const badges = [];
+      if (report.memory) badges.push(el('span', { class: 'badge ok' }, 'mémoire'));
+      if (entry.status === 'truncated') {
+        badges.push(el('span', { class: 'badge warn' }, 'tronqué (max_tokens)'));
+      } else if (entry.status !== 'ok') {
+        badges.push(el('span', { class: 'badge bad' }, entry.status));
+      }
+      const meta = [
+        entry.plan && entry.plan.length ? `${entry.plan.length} coups` : 'plan vide',
+        entry.attempts > 1 ? `${entry.attempts} essais` : null,
+        entry.finish_reason ? `fin : ${entry.finish_reason}` : null,
+      ].filter(Boolean).join(' · ');
+      const native = entry.native_reasoning
+        ? el('details', { class: 'native' },
+            el('summary', { class: 'dim' },
+              `raisonnement interne (${entry.native_reasoning.length.toLocaleString('fr-FR')} car.)`),
+            el('pre', {}, entry.native_reasoning))
+        : '';
       container.append(el('div', { class: 'row' },
         el('details', {},
-          el('summary', { class: `f-text-${entry.faction_id}` },
-            `${report.model || agent} — ${entry.status}` +
-            (entry.plan && entry.plan.length ? ` · ${entry.plan.length} coups` : ' · plan vide')),
-          el('pre', {}, entry.reasoning || '(aucun raisonnement rendu)'))));
+          el('summary', {},
+            el('span', { class: `f-text-${entry.faction_id}` }, report.model || agent),
+            ' ', ...badges, el('span', { class: 'dim' }, ` ${meta}`)),
+          el('pre', {}, entry.reasoning || '(aucun raisonnement rendu)'),
+          native)));
     }
   }
   if (!found) {
-    container.append(el('div', { class: 'empty' },
-      Object.keys(reports).length
-        ? 'Aucun raisonnement à ce tour.'
-        : 'Partie sans siège LLM — pas de raisonnement à montrer.'));
+    container.append(el('div', { class: 'empty' }, 'Aucune décision LLM enregistrée pour ce tour.'));
   }
 }
 
@@ -555,6 +607,41 @@ function renderCampaign(manifest, games) {
   }
   metrics.append(metricsBody);
   body.append(metrics);
+
+  /* Consommation des sièges LLM — la matière de l'étude mémoire */
+  const llmRows = Object.entries(manifest.metrics || {})
+    .filter(([, report]) => report.exactitude && report.exactitude.llm);
+  if (llmRows.length) {
+    body.append(el('h3', {}, 'Sièges LLM — consommation et santé'));
+    const table = el('table', {}, el('thead', {}, el('tr', {},
+      el('th', {}, 'participant'), el('th', {}, 'mémoire'),
+      el('th', { class: 'num' }, 'appels'), el('th', { class: 'num' }, 'réponse'),
+      el('th', { class: 'num' }, 'tokens entrée/partie'),
+      el('th', { class: 'num' }, 'cache'), el('th', { class: 'num' }, 'raisonnement'),
+      el('th', { class: 'num' }, 'tours muets'), el('th', { class: 'num' }, 'dont tronqués'))));
+    const tbody = el('tbody');
+    for (const [name, report] of llmRows) {
+      const llm = report.exactitude.llm;
+      const memory = llm.memory_seats
+        ? el('span', { class: 'badge ok' }, 'oui')
+        : el('span', { class: 'badge na' }, 'non');
+      tbody.append(el('tr', {},
+        el('td', {}, name), el('td', {}, memory),
+        el('td', { class: 'num' }, llm.calls ?? '—'),
+        el('td', { class: 'num' }, pct(llm.response_rate)),
+        el('td', { class: 'num' }, num(llm.prompt_tokens_per_game, 0)),
+        el('td', { class: 'num' }, pct(llm.cache_hit_rate)),
+        el('td', { class: 'num' }, llm.reasoning_tokens ?? '—'),
+        el('td', { class: 'num' }, llm.mute_turns ?? 0),
+        el('td', { class: 'num' }, llm.truncated_turns ?? 0)));
+    }
+    table.append(tbody);
+    body.append(table);
+    body.append(el('p', { class: 'hint' },
+      'Un tour tronqué est un plafond max_tokens trop serré, pas un modèle ' +
+      'défaillant : relever max_tokens pour ce modèle dans models.yaml. Le taux ' +
+      'de cache est la part de l\'entrée servie par le cache du fournisseur.'));
+  }
 
   /* Critères §13 */
   const criteria = manifest.criteria;

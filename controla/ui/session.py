@@ -92,12 +92,11 @@ class Session:
             policy.reset(index, spec.seed)
             policies[agent_name(index)] = policy
 
-        return cls(
-            spec=spec,
-            env=env,
-            policies=policies,
-            world=world_snapshot(env.cfg, env.catalog, env.state_),
-        )
+        world = world_snapshot(env.cfg, env.catalog, env.state_)
+        # Comme `play_match` : sans l'état initial, le replay d'une partie jouée
+        # à la main démarrerait au tour 1, une image de moins que les autres.
+        world["initial_board"] = board_snapshot(env.cfg, env.catalog, env.state_)
+        return cls(spec=spec, env=env, policies=policies, world=world)
 
     # ── état ─────────────────────────────────────────────────────────────────
 

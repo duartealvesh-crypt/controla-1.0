@@ -40,6 +40,20 @@ def create_app(root: Path | str = library.DEFAULT_ROOT, config_path: str | None 
 
     app = FastAPI(title="Controla", docs_url=None, redoc_url=None)
 
+    @app.middleware("http")
+    async def revalidate_assets(request, call_next):
+        """Le navigateur doit redemander la page et ses scripts à chaque visite.
+
+        Sans cela il resservait un `app.js` périmé après une mise à jour : un
+        écran ancien sur des données nouvelles, sans aucune erreur visible.
+        `no-cache` n'interdit pas le cache — il impose une revalidation, que
+        l'ETag de `StaticFiles` rend quasi gratuite en local.
+        """
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     # ── contexte ─────────────────────────────────────────────────────────────
 
     @app.get("/api/context")

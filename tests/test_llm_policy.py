@@ -27,6 +27,8 @@ class FakeBackend:
         self.model = "fake-model"
         self.responses = list(responses)
         self.prompts: list[tuple[str, str]] = []
+        self.histories: list[list[dict]] = []
+        self.last_call = None
 
         class _Stats:
             def to_dict(self):
@@ -34,8 +36,11 @@ class FakeBackend:
 
         self.stats = _Stats()
 
-    def complete(self, system, user, tool):
+    def complete(self, system, user, tool, history=(), sink=None):
         self.prompts.append((system, user))
+        # Copie : la policy allonge sa liste après l'appel, et l'on veut voir ce
+        # qui avait été ENVOYÉ, pas ce qu'est devenue la mémoire depuis.
+        self.histories.append([dict(message) for message in history])
         if not self.responses:
             return None
         return self.responses.pop(0)
@@ -378,3 +383,61 @@ def test_factory_lists_both_families():
     catalogue = available_seats()
     assert "cooperator" in catalogue["scripted"]
     assert catalogue["models"]
+
+
+# ── raisonnement conservé, réponses tronquées ───────────────────────────────
+
+def test_long_reasoning_is_kept_whole_by_default(context):
+    """La fin d'un raisonnement est là où le modèle conclut : ne pas la couper."""
+    cfg, catalog, env, view = context
+    legal = next(item["index"] for item in view["legal_actions"] if item["cost"] > 0)
+    long_text = "réflexion " * 2000                   # 20 000 caractères
+    policy = make_policy(context, [{"plan": [{"index": legal}], "reasoning": long_text}])
+    agent = env.agent_selection
+    policy.act(env.observe(agent), info_of(env, agent))
+    assert policy.stats.reasonings[0]["reasoning"] == long_text
+
+
+def test_native_reasoning_and_finish_reason_reach_the_replay(context):
+    from controla.policies.llm.backend import CallOutcome
+
+    cfg, catalog, env, view = context
+    legal = next(item["index"] for item in view["legal_actions"] if item["cost"] > 0)
+    policy = make_policy(context, [{"plan": [{"index": legal}], "reasoning": "bref"}])
+    policy.backend.last_call = CallOutcome(
+        finish_reason="tool_calls", native_reasoning="raisonnement interne détaillé",
+    )
+    agent = env.agent_selection
+    policy.act(env.observe(agent), info_of(env, agent))
+    record = policy.stats.reasonings[0]
+    assert record["native_reasoning"] == "raisonnement interne détaillé"
+    assert record["finish_reason"] == "tool_calls"
+    assert record["attempts"] == 1
+
+
+def test_a_truncated_answer_is_not_retried_blindly(context):
+    """Le même prompt sous le même plafond sera tronqué de nouveau : relancer
+    triple la facture pour rien."""
+    from controla.policies.llm.backend import CallOutcome
+
+    _cfg, _catalog, env, _view = context
+
+    class TruncatingBackend(FakeBackend):
+        def complete(self, system, user, tool, history=(), sink=None):
+            super().complete(system, user, tool, history)
+            self.last_call = CallOutcome(finish_reason="length", error_kind="truncated",
+                                         native_reasoning="je n'ai pas fini de")
+            return None
+
+    cfg, catalog, _env, _view = context
+    policy = LLMPolicy(TruncatingBackend([]), cfg, catalog)
+    policy.reset(0, 1)
+    agent = env.agent_selection
+    policy.act(env.observe(agent), info_of(env, agent))
+
+    assert len(policy.backend.prompts) == 1, "un appel tronqué a été relancé"
+    assert policy.stats.truncated_turns == 1
+    assert policy.stats.mute_turns == 1
+    record = policy.stats.reasonings[0]
+    assert record["status"] == "truncated"
+    assert record["native_reasoning"] == "je n'ai pas fini de"

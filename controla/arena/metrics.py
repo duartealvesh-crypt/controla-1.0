@@ -104,6 +104,12 @@ class Counters:
                 "response_rate": _round(
                     _ratio(calls - self.llm.get("failures", 0), calls)
                 ),
+                "cache_hit_rate": _round(
+                    _ratio(self.llm.get("cached_tokens", 0), self.llm.get("prompt_tokens", 0))
+                ),
+                "prompt_tokens_per_game": _round(
+                    _ratio(self.llm.get("prompt_tokens", 0), self.seats), 1
+                ),
             }
 
         return {
@@ -149,6 +155,12 @@ class Counters:
 
 
 CHANCE_SEAT = "random_legal"
+
+# Compteurs de consommation repris des rapports de policy LLM.
+TOKEN_KEYS = (
+    "prompt_tokens", "completion_tokens", "cached_tokens",
+    "cache_write_tokens", "reasoning_tokens",
+)
 
 
 class Criteria:
@@ -384,11 +396,19 @@ def _absorb_policy_reports(campaign: Campaign, result: dict, seats: list[str]) -
         policy = report.get("policy", {})
         backend = report.get("backend", {})
         for key in ("planned_moves", "rejected_moves", "empty_plans",
-                    "mute_turns", "retries"):
+                    "mute_turns", "truncated_turns", "retries"):
             counters.llm[key] = counters.llm.get(key, 0) + int(policy.get(key, 0))
         counters.llm["calls"] = counters.llm.get("calls", 0) + int(
             backend.get("calls", 0)
         )
         counters.llm["failures"] = counters.llm.get("failures", 0) + sum(
             backend.get("failures", {}).values()
+        )
+        # Le budget et le cache, siège par siège : c'est ce que l'étude mémoire
+        # compare. Ces compteurs sont PAR PARTIE (cf. `LLMPolicy.call_stats`),
+        # donc leur somme sur la campagne est juste.
+        for key in TOKEN_KEYS:
+            counters.llm[key] = counters.llm.get(key, 0) + int(backend.get(key, 0) or 0)
+        counters.llm["memory_seats"] = counters.llm.get("memory_seats", 0) + int(
+            bool(report.get("memory"))
         )

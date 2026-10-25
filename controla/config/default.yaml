@@ -372,6 +372,19 @@ llm:
   max_retries: 2        # retries SDK sur erreurs transitoires (429 / 5xx)
   plan_retries: 2       # relances APRÈS une sortie invalide, avec l'erreur précise
   max_legal_listed: 60  # coups énumérés par famille dans le prompt (borne les tokens)
+  # Mémoire inter-tours : rejouer à chaque appel les échanges des tours
+  # précédents (état reçu + plan rendu). Défaut d'ÉTUDE, surchargé par modèle
+  # dans models.yaml (`memory: true`), pour pouvoir opposer un modèle à lui-même.
+  # Coût : le prompt du tour N porte les N tours précédents, soit ~15 000 tokens
+  # d'entrée en fin de partie — d'où l'intérêt d'un fournisseur à cache de
+  # prompt, qui ressert ce préfixe au lieu de le refacturer.
+  memory: false
+  # Longueur maximale conservée d'un raisonnement (explicite comme natif) dans
+  # le replay. `null` = tout garder : la fin d'un raisonnement est là où le
+  # modèle conclut, et c'est elle qu'une coupe arbitraire jetait. Un modèle à
+  # réflexion produit ~2 600 tokens par tour, soit ~600 ko par partie à 4 sièges
+  # dans le JSONL — à plafonner seulement si le disque l'impose.
+  reasoning_max_chars: null
 
 # ── Reward (RL ; les policies LLM lisent le texte, pas ce signal) ────────────
 reward:

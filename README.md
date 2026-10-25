@@ -63,6 +63,66 @@ moitié des sièges joue à 0.7 et l'autre au défaut du fournisseur mesure le
 réglage autant que le modèle. D'où les `temperature: null` explicites de
 `models.yaml`, et une commande qui les vérifie plutôt que de les croire.
 
+## Choisir un modèle de test
+
+Pour vérifier le code et le respect des règles, il faut un modèle **gratuit et
+rapide** — pas le meilleur. Le choix se fait en trois étages, du moins cher au
+plus cher, chacun ne retenant que ce que le précédent a validé :
+
+1. **Banc** — chaque candidat reçoit les mêmes vrais prompts de jeu (3 tours
+   d'une partie scriptée à seed fixée), au premier essai, sans relance :
+
+   ```bash
+   python -m controla.cli bench --dry-run
+   ```
+
+   ```bash
+   python -m controla.cli bench
+   ```
+
+   Sans `--models`, la commande découvre elle-même les modèles gratuits
+   d'OpenRouter qui annoncent `tools` + `tool_choice` et tiennent 90 % de
+   disponibilité sur 24 h. Elle mesure pour chacun : le plan arrive-t-il, sa
+   forme est-elle lisible, ses index sont-ils légaux, son plan tient-il dans ses
+   points — puis la latence. Résultats détaillés dans `runs/bench/`.
+
+2. **Une partie** — le premier du classement contre trois archétypes (15
+   appels), puis relecture dans `cli ui` : ses raisonnements disent-ils ce
+   que ses coups font ?
+
+3. **Une petite campagne** seulement ensuite.
+
+Le quota du palier gratuit dimensionne tout : **20 requêtes/minute, 50 par
+jour** sans crédit acheté, **1 000 par jour** une fois 10 $ de crédits achetés
+(les modèles gratuits restent gratuits). Le banc complet coûte ~36 requêtes,
+une partie à un siège LLM 15.
+
+## Étude : la mémoire inter-tours
+
+Par défaut, un dieu LLM n'a **aucune mémoire** : chaque appel ne voit que le
+règlement et l'état du tour. Il ignore ce qu'il a planifié, promis ou écrit la
+veille. Le paramètre `memory: true` d'une entrée de `models.yaml` rejoue à
+chaque tour la conversation des tours précédents — l'état reçu, le plan rendu.
+
+C'est un paramètre d'**étude** : une *variante* (`model:` pointant vers le même
+modèle) occupe un siège à part, classé séparément. On oppose ainsi un modèle à
+lui-même, la mémoire étant la seule différence :
+
+```bash
+python -m controla.cli tournament --seeds 1,2,3,4,5,6 --policies openai/gpt-5-nano,openai/gpt-5-nano@memoire,cooperator,turtle
+```
+
+La conversation ne fait que **s'allonger** : son préfixe est identique d'un
+appel à l'autre, donc servi par le cache de prompt du fournisseur (implicite
+chez OpenAI, DeepSeek, Gemini ; `cache_control: true` pour Anthropic). Le
+tableau de campagne donne, siège par siège, les tokens d'entrée par partie et
+la part servie par le cache — de quoi chiffrer ce que la mémoire coûte, à côté
+de ce qu'elle rapporte au classement.
+
+Ce qui est rejoué est la réponse que le modèle a **rendue**, pas son
+raisonnement interne : seuls les modèles à réflexion en ont un, et le rejouer
+donnerait aux uns une mémoire plus riche qu'aux autres.
+
 ## Interface web
 
 ```bash
@@ -212,7 +272,7 @@ dieu ne change **rien** pour les autres.
 pytest
 ```
 
-307 tests, ~70 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
+330 tests, ~80 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
 invariants sont indépendants des constantes, donc un sweep qui les casse a cassé le
 moteur et non l'équilibre.
 
@@ -232,6 +292,7 @@ moteur et non l'équilibre.
 | `test_snapshot.py` | l'instantané de replay **est** l'état joué, case par case · glyphes distincts |
 | `test_ui.py` | confinement des chemins servis, session jouable rejouable, audit de modèles qui mord |
 | `test_llm_backend.py` | tokens comptés même sur réponse inexploitable, réglage `null` non envoyé |
+| `test_llm_memory.py` | sans mémoire rien n'est rejoué · avec, chaque historique est un préfixe exact du suivant (cache) · rien ne traverse deux parties |
 
 ## État d'avancement
 

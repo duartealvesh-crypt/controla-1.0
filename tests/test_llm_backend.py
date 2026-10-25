@@ -186,3 +186,111 @@ def test_tool_call_forces_the_expected_function():
     sent = backend._client.calls[0]
     assert sent["tool_choice"]["function"]["name"] == "plan_turn"
     assert json.dumps(sent["tools"])                 # sérialisable, donc envoyable
+
+
+# ── Ce qui se perdait : raisonnement natif, raison de fin, historique ───────
+
+def _choice_response(message, finish_reason, usage=None):
+    choice = SimpleNamespace(message=message, finish_reason=finish_reason)
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
+def test_native_reasoning_is_captured_under_each_known_field():
+    """Chaque passerelle nomme le champ à sa façon ; aucun ne doit se perdre."""
+    def tool_message(**extra):
+        call = SimpleNamespace(function=SimpleNamespace(arguments='{"plan": []}'))
+        return SimpleNamespace(tool_calls=[call], content=None, **extra)
+
+    cases = [
+        {"reasoning": "je pèse mes options"},
+        {"reasoning_content": "je pèse mes options"},
+        {"reasoning_details": [{"type": "reasoning.text", "text": "je pèse mes options"}]},
+    ]
+    for extra in cases:
+        backend = _backend([_choice_response(tool_message(**extra), "tool_calls")])
+        backend.complete("s", "u", TOOL)
+        assert backend.last_call.native_reasoning == "je pèse mes options", extra
+
+
+def test_a_truncated_answer_is_classified_as_truncated_not_empty():
+    """Coupé par `max_tokens` : un réglage trop serré, pas un modèle défaillant."""
+    message = SimpleNamespace(tool_calls=None, content=None, reasoning="je réfléchis enc")
+    backend = _backend([_choice_response(message, "length", _usage(prompt=10, completion=8192))])
+    assert backend.complete("s", "u", TOOL) is None
+    assert backend.last_call.truncated
+    assert backend.last_call.error_kind == "truncated"
+    assert backend.stats.failures == {"truncated": 1}
+    assert backend.stats.finish_reasons == {"length": 1}
+    # Même coupé, le raisonnement partiel est gardé : c'est souvent tout ce qu'il y a.
+    assert backend.last_call.native_reasoning == "je réfléchis enc"
+
+
+def test_cache_writes_are_counted_apart_from_cache_reads():
+    usage = _usage(prompt=5000, completion=10)
+    usage.prompt_tokens_details = SimpleNamespace(cached_tokens=0, cache_write_tokens=4800)
+    stats = CallStats()
+    stats.record_usage(usage)
+    assert stats.cache_write_tokens == 4800
+    assert stats.cached_tokens == 0
+
+
+def test_history_sits_between_the_system_and_the_turn():
+    """Système puis historique : le préfixe qui ne fait que s'allonger."""
+    history = [{"role": "user", "content": "tour 0"},
+               {"role": "assistant", "content": '{"plan": []}'}]
+    backend = _backend([_tool_response('{"plan": []}')])
+    backend.complete("règles", "tour 1", TOOL, history=history)
+    sent = backend._client.calls[0]["messages"]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user"]
+    assert sent[0]["content"] == "règles"
+    assert sent[-1]["content"] == "tour 1"
+
+
+def test_cache_control_is_sent_only_when_declared():
+    plain = _backend([_tool_response('{"plan": []}')])
+    plain.complete("s", "u", TOOL)
+    assert "extra_body" not in plain._client.calls[0]
+
+    cached = _backend([_tool_response('{"plan": []}')], cache_control=True)
+    cached.complete("s", "u", TOOL)
+    assert cached._client.calls[0]["extra_body"] == {"cache_control": {"type": "ephemeral"}}
+
+
+def test_json_mode_puts_the_schema_in_the_system_not_in_the_turn():
+    """Le schéma est constant : dans le système il se cache, et le message du
+    tour mémorisé reste exactement celui qui a été envoyé."""
+    backend = _backend([_text_response('{"plan": []}')], tool_support=False)
+    backend.complete("règles", "tour 1", TOOL)
+    sent = backend._client.calls[0]["messages"]
+    assert "schéma" in sent[0]["content"]
+    assert sent[-1]["content"] == "tour 1"
+
+
+def test_the_seat_label_and_the_api_model_are_distinct():
+    backend = LLMBackend(base_url="http://local", api_key="x",
+                         model="openai/gpt-5-nano", label="openai/gpt-5-nano@memoire")
+    backend._client = FakeClient([_tool_response('{"plan": []}')])
+    backend.complete("s", "u", TOOL)
+    assert backend._client.calls[0]["model"] == "openai/gpt-5-nano"
+    assert backend.label == "openai/gpt-5-nano@memoire"
+
+
+def test_each_seat_counts_only_its_own_calls_on_a_shared_backend():
+    """Le backend est partagé sur la campagne : ses compteurs sont cumulés.
+    Additionner ce cumul partie après partie surcomptait chaque appel ; chaque
+    siège tient donc les siens."""
+    backend = _backend([
+        _tool_response('{"plan": []}', _usage(prompt=100)),
+        _tool_response('{"plan": []}', _usage(prompt=100)),
+        _tool_response('{"plan": []}', _usage(prompt=100)),
+    ])
+    first_game, second_game = CallStats(), CallStats()
+    backend.complete("s", "u", TOOL, sink=first_game)
+    backend.complete("s", "u", TOOL, sink=second_game)
+    backend.complete("s", "u", TOOL, sink=second_game)
+
+    assert first_game.calls == 1 and first_game.prompt_tokens == 100
+    assert second_game.calls == 2 and second_game.prompt_tokens == 200
+    assert backend.stats.calls == 3                  # le cumul reste disponible
+    # Ce qui s'additionne sur la campagne vaut bien le total réel.
+    assert first_game.calls + second_game.calls == backend.stats.calls
