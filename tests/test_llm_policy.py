@@ -242,7 +242,7 @@ def test_a_bare_integer_plan_is_accepted(context):
 
 def test_an_empty_plan_is_a_legitimate_choice(context):
     cfg, catalog, env, _view = context
-    policy = make_policy(context, [{"plan": [], "reasoning": "j'attends"}])
+    policy = make_policy(context, [{"plan": [], "reasoning": "j'économise mes points pour le tour suivant"}])
     agent = env.agent_selection
     assert policy.act(env.observe(agent), info_of(env, agent)) == env.index.end_turn_index
     assert policy.stats.empty_plans == 1
@@ -491,3 +491,26 @@ def test_two_blank_answers_lose_the_turn_and_say_why(context):
     assert policy.stats.blank_turns == 1 and policy.stats.mute_turns == 1
     assert policy.stats.empty_plans == 0, "un tour perdu n'est pas un choix de passer"
     assert policy.stats.reasonings[0]["status"] == "blank"
+
+
+def test_serialisation_debris_is_not_a_reasoning():
+    """Fragments relevés en partie réelle : ni vides, ni des explications."""
+    from controla.policies.llm.policy import has_reasoning
+
+    for debris in ("", "   ", ": ", ":dots_ellipsis", "}]", "...", "42"):
+        assert not has_reasoning(debris), repr(debris)
+    for sentence in ("je garde mes points", "Waiting for the war to start",
+                     "j'économise mes points pour le tour suivant"):
+        assert has_reasoning(sentence), sentence
+
+
+def test_an_empty_plan_with_debris_reasoning_is_retried(context):
+    cfg, catalog, env, view = context
+    legal = next(item["index"] for item in view["legal_actions"] if item["cost"] > 0)
+    policy = make_policy(context, [
+        {"plan": [], "reasoning": ":dots_ellipsis"},
+        {"plan": [{"index": legal}], "reasoning": "je bénis ma meilleure case"},
+    ])
+    agent = env.agent_selection
+    assert policy.act(env.observe(agent), info_of(env, agent)) == legal
+    assert policy.stats.blank_answers == 1 and policy.stats.empty_plans == 0

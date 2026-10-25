@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -66,6 +67,21 @@ BLANK_ANSWER_NOTE = (
     "de ne rien jouer, explique pourquoi dans 'reasoning' ; sinon, donne ton plan."
 )
 BLANK_RETRIES = 1
+
+# Un raisonnement compte s'il contient au moins une vraie phrase : ce seuil de
+# mots écarte les fragments de sortie cassée observés en partie réelle — `": "`,
+# `":dots_ellipsis"`, `"}]"` — qu'un simple test « non vide » laissait passer.
+MIN_REASONING_WORDS = 3
+_WORD = re.compile(r"[^\W\d_]{2,}")
+
+
+def has_reasoning(text) -> bool:
+    """Le texte contient-il au moins `MIN_REASONING_WORDS` mots de deux lettres ?
+
+    Volontairement grossier : on ne juge pas la qualité d'un raisonnement, on
+    distingue une explication — même brève — d'un débris de sérialisation.
+    """
+    return len(_WORD.findall(str(text or ""))) >= MIN_REASONING_WORDS
 
 
 @dataclass
@@ -248,7 +264,7 @@ class LLMPolicy(Policy):
                 continue
 
             plan, problem = self._validate(payload, legal, index)
-            if problem is None and not plan and not str(payload.get("reasoning") or "").strip():
+            if problem is None and not plan and not has_reasoning(payload.get("reasoning")):
                 self.stats.blank_answers += 1
                 blanks += 1
                 if blanks > BLANK_RETRIES:

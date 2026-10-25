@@ -184,7 +184,9 @@ def judge(payload: dict | None, probe: Probe) -> dict:
                "empty_plan": False, "has_reasoning": False}
     if payload is None:
         return verdict
-    verdict["has_reasoning"] = bool(str(payload.get("reasoning") or "").strip())
+    from controla.policies.llm.policy import has_reasoning
+
+    verdict["has_reasoning"] = has_reasoning(payload.get("reasoning"))
     raw = payload.get("plan")
     if not isinstance(raw, list):
         return verdict
