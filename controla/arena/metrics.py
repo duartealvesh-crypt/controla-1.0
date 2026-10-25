@@ -396,7 +396,7 @@ def _absorb_policy_reports(campaign: Campaign, result: dict, seats: list[str]) -
         policy = report.get("policy", {})
         backend = report.get("backend", {})
         for key in ("planned_moves", "rejected_moves", "empty_plans",
-                    "mute_turns", "truncated_turns", "retries"):
+                    "mute_turns", "truncated_turns", "filtered_turns", "retries"):
             counters.llm[key] = counters.llm.get(key, 0) + int(policy.get(key, 0))
         counters.llm["calls"] = counters.llm.get("calls", 0) + int(
             backend.get("calls", 0)

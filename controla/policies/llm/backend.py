@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -107,6 +108,9 @@ class CallStats:
         if error_kind:
             self.failures[error_kind] = self.failures.get(error_kind, 0) + 1
 
+    def record_finish(self, reason: str) -> None:
+        self.finish_reasons[reason] = self.finish_reasons.get(reason, 0) + 1
+
     def record_usage(self, usage) -> None:
         """Absorbe le bloc `usage` d'une réponse, quel que soit le fournisseur.
 
@@ -191,6 +195,17 @@ class CallOutcome:
     def truncated(self) -> bool:
         return self.finish_reason == "length"
 
+    @property
+    def filtered(self) -> bool:
+        """Le filtre de contenu du FOURNISSEUR a coupé la génération.
+
+        Ni le modèle ni notre prompt ne sont en cause au sens strict : dans un
+        jeu de guerre, le filtre se déclenche quand le modèle raisonne sur une
+        attaque. Mesuré sur dots-3-note (2026-10-25) : les tours filtrés sont
+        ceux où il décidait d'attaquer — ce qui biaise le banc vers la paix.
+        """
+        return self.finish_reason == "content_filter"
+
 
 def _field(block, key: str):
     if isinstance(block, dict):
@@ -263,7 +278,13 @@ class LLMBackend:
         # par ajouts successifs.
         self.cache_control = cache_control
         self.stats = CallStats()
-        self.last_call = CallOutcome()
+        # Les quatre dieux d'une ronde planifient en parallèle, et deux sièges du
+        # même modèle partagent ce backend. Ses compteurs cumulés sont donc
+        # écrits par plusieurs threads : un verrou évite les mises à jour
+        # perdues, et `last_call` est propre à chaque thread — sans quoi une
+        # policy lirait l'issue de l'appel de sa voisine.
+        self._lock = threading.Lock()
+        self._local = threading.local()
         self._client = OpenAI(
             base_url=base_url, api_key=api_key, timeout=timeout, max_retries=max_retries,
             # En-têtes propres au fournisseur (attribution OpenRouter, par
@@ -272,6 +293,27 @@ class LLMBackend:
             # oublie.
             default_headers=default_headers or None,
         )
+
+    @property
+    def last_call(self) -> CallOutcome:
+        """Issue du dernier appel fait PAR LE THREAD COURANT."""
+        outcome = getattr(self._local, "outcome", None)
+        if outcome is None:
+            outcome = self._local.outcome = CallOutcome()
+        return outcome
+
+    @last_call.setter
+    def last_call(self, outcome: CallOutcome) -> None:
+        self._local.outcome = outcome
+
+    def _record(self, sinks, method: str, *args) -> None:
+        """Écrit dans chaque puits ; le cumul partagé sous verrou."""
+        for stats in sinks:
+            if stats is self.stats:
+                with self._lock:
+                    getattr(stats, method)(*args)
+            else:
+                getattr(stats, method)(*args)
 
     def _sampling(self) -> dict:
         """N'envoie que les réglages définis : ne jamais forcer un paramètre qu'un
@@ -323,8 +365,7 @@ class LLMBackend:
         except Exception as error:                    # noqa: BLE001 — on classe puis on log
             kind = classify(error)
             self.last_call.error_kind = kind
-            for stats in sinks:
-                stats.record(time.perf_counter() - started, kind)
+            self._record(sinks, "record", time.perf_counter() - started, kind)
             if kind == "fatal":
                 logger.error(
                     "[%s] erreur FATALE (clé, nom de modèle ou accès) — ce modèle "
@@ -339,32 +380,32 @@ class LLMBackend:
         # Les tokens sont comptés même quand la réponse est inexploitable : un
         # modèle qui répond à côté a quand même consommé le budget, et l'oublier
         # ferait paraître économe le modèle le plus coûteux du panel.
-        for stats in sinks:
-            stats.record_usage(getattr(response, "usage", None))
+        self._record(sinks, "record_usage", getattr(response, "usage", None))
         choices = getattr(response, "choices", None)
         if choices:
             finish = getattr(choices[0], "finish_reason", None)
             self.last_call.finish_reason = finish
             if finish:
-                for stats in sinks:
-                    stats.finish_reasons[finish] = stats.finish_reasons.get(finish, 0) + 1
+                self._record(sinks, "record_finish", finish)
             self.last_call.native_reasoning = extract_native_reasoning(choices[0].message)
 
         if payload is None:
             # « Tronqué » et « vide » appellent deux remèdes opposés : relancer
             # un appel tronqué à l'identique le tronquera encore, alors qu'une
             # réponse vide peut très bien ne pas se reproduire.
-            kind = "truncated" if self.last_call.truncated else "empty"
-            self.last_call.error_kind = kind
-            for stats in sinks:
-                stats.record(elapsed, kind)
-            logger.warning(
-                "[%s] réponse %s", self.label,
-                "tronquée par max_tokens" if kind == "truncated" else "vide ou non parsable",
+            kind = (
+                "truncated" if self.last_call.truncated
+                else "filtered" if self.last_call.filtered
+                else "empty"
             )
+            self.last_call.error_kind = kind
+            self._record(sinks, "record", elapsed, kind)
+            logger.warning("[%s] réponse %s", self.label, {
+                "truncated": "tronquée par max_tokens",
+                "filtered": "coupée par le filtre de contenu du fournisseur",
+            }.get(kind, "vide ou non parsable"))
             return None
-        for stats in sinks:
-            stats.record(elapsed)
+        self._record(sinks, "record", elapsed)
         return payload
 
     # ── modes ───────────────────────────────────────────────────────────────

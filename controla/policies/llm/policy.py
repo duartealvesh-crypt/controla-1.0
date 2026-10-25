@@ -68,6 +68,10 @@ class PolicyStats:
     # n'est pas une défaillance du modèle mais un réglage trop serré — à
     # distinguer, sans quoi on classe un modèle capable comme défaillant.
     truncated_turns: int = 0
+    # Sous-ensemble des tours muets : le filtre de contenu du fournisseur a coupé
+    # le modèle. Compté à part parce qu'il ne frappe pas au hasard — il tombe
+    # quand le modèle raisonne sur une attaque — et biaise donc le classement.
+    filtered_turns: int = 0
     retries: int = 0
     reasonings: list[dict] = field(default_factory=list)
 
@@ -89,6 +93,7 @@ class PolicyStats:
             "empty_plans": self.empty_plans,
             "mute_turns": self.mute_turns,
             "truncated_turns": self.truncated_turns,
+            "filtered_turns": self.filtered_turns,
             "retries": self.retries,
         }
 
@@ -133,13 +138,29 @@ class LLMPolicy(Policy):
 
     # ── décision ────────────────────────────────────────────────────────────
 
+    def plan_ahead(self, info: dict) -> None:
+        """Planifie le tour AVANT que ce siège ne reçoive la main.
+
+        L'arène l'appelle pour les quatre dieux en parallèle, en début de ronde.
+        C'est exact, pas approché : rien n'est appliqué avant la barrière, et
+        les coups soumis par un dieu ne modifient que SES points — la vue d'un
+        rival au début de la ronde est donc celle qu'il aurait reçue à son tour
+        de parole. Sans cela, chaque ronde attendait quatre appels l'un après
+        l'autre.
+
+        Idempotent : un tour déjà planifié n'est pas redemandé.
+        """
+        view = info["view"]
+        if view["turn"] != self._planned_turn:
+            self._plan = self._request_plan(view, info["index"])
+            self._planned_turn = view["turn"]
+
     def act(self, observation: dict, info: dict) -> int | dict:
         view = info["view"]
         index = info["index"]
 
-        if view["turn"] != self._planned_turn:
-            self._plan = self._request_plan(view, index)
-            self._planned_turn = view["turn"]
+        # Planifié d'avance si l'arène l'a demandé ; sinon, maintenant.
+        self.plan_ahead(info)
 
         legal = {item["index"] for item in view["legal_actions"]}
         while self._plan:
@@ -180,10 +201,18 @@ class LLMPolicy(Policy):
 
             if payload is None:
                 kind = getattr(outcome, "error_kind", None)
-                if kind in ("truncated", "fatal"):
+                if kind in ("truncated", "filtered", "fatal"):
                     # Relancer à l'identique ne sert à rien : un appel tronqué
-                    # le sera encore (même prompt, même plafond), une clé
+                    # le sera encore (même prompt, même plafond), un appel
+                    # filtré aussi (mesuré : 6 relances, 6 filtrages), une clé
                     # invalide le restera. On s'arrête, et on le dit.
+                    if kind == "filtered":
+                        self.stats.filtered_turns += 1
+                        logger.warning(
+                            "[%s F%s T%s] coupé par le filtre de contenu du "
+                            "fournisseur — tour perdu",
+                            self.name, self.faction_id, view["turn"],
+                        )
                     if kind == "truncated":
                         self.stats.truncated_turns += 1
                         logger.warning(
@@ -219,7 +248,11 @@ class LLMPolicy(Policy):
             self.name, self.faction_id, view["turn"],
         )
         outcome = getattr(self.backend, "last_call", None)
-        status = "truncated" if getattr(outcome, "truncated", False) else "mute"
+        status = (
+            "truncated" if getattr(outcome, "truncated", False)
+            else "filtered" if getattr(outcome, "filtered", False)
+            else "mute"
+        )
         self._record(view, {"reasoning": ""}, [], status=status,
                      outcome=outcome, attempts=attempts)
         self._remember(user, MUTE_MEMORY)

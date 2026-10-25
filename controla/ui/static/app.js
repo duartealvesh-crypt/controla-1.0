@@ -427,6 +427,8 @@ function renderReasoning(container, decisionTurn) {
       if (report.memory) badges.push(el('span', { class: 'badge ok' }, 'mémoire'));
       if (entry.status === 'truncated') {
         badges.push(el('span', { class: 'badge warn' }, 'tronqué (max_tokens)'));
+      } else if (entry.status === 'filtered') {
+        badges.push(el('span', { class: 'badge warn' }, 'filtré par le fournisseur'));
       } else if (entry.status !== 'ok') {
         badges.push(el('span', { class: 'badge bad' }, entry.status));
       }
@@ -618,7 +620,8 @@ function renderCampaign(manifest, games) {
       el('th', { class: 'num' }, 'appels'), el('th', { class: 'num' }, 'réponse'),
       el('th', { class: 'num' }, 'tokens entrée/partie'),
       el('th', { class: 'num' }, 'cache'), el('th', { class: 'num' }, 'raisonnement'),
-      el('th', { class: 'num' }, 'tours muets'), el('th', { class: 'num' }, 'dont tronqués'))));
+      el('th', { class: 'num' }, 'tours muets'), el('th', { class: 'num' }, 'dont tronqués'),
+      el('th', { class: 'num' }, 'dont filtrés'))));
     const tbody = el('tbody');
     for (const [name, report] of llmRows) {
       const llm = report.exactitude.llm;
@@ -633,13 +636,16 @@ function renderCampaign(manifest, games) {
         el('td', { class: 'num' }, pct(llm.cache_hit_rate)),
         el('td', { class: 'num' }, llm.reasoning_tokens ?? '—'),
         el('td', { class: 'num' }, llm.mute_turns ?? 0),
-        el('td', { class: 'num' }, llm.truncated_turns ?? 0)));
+        el('td', { class: 'num' }, llm.truncated_turns ?? 0),
+        el('td', { class: 'num' }, llm.filtered_turns ?? 0)));
     }
     table.append(tbody);
     body.append(table);
     body.append(el('p', { class: 'hint' },
       'Un tour tronqué est un plafond max_tokens trop serré, pas un modèle ' +
-      'défaillant : relever max_tokens pour ce modèle dans models.yaml. Le taux ' +
+      'défaillant : relever max_tokens pour ce modèle dans models.yaml. Un tour ' +
+      'filtré a été coupé par le filtre de contenu du fournisseur — il tombe ' +
+      'surtout quand le modèle planifie une attaque. Le taux ' +
       'de cache est la part de l\'entrée servie par le cache du fournisseur.'));
   }
 

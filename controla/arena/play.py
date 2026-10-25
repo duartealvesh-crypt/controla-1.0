@@ -10,6 +10,7 @@ qui occupe un siège, la policy ignore qu'il y a un tournoi.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from controla.dynamics.scoring import final_report
@@ -31,6 +32,78 @@ class MatchSpec:
     # mégaoctets pour rien.
     snapshots: bool = False
     metadata: dict = field(default_factory=dict)
+
+
+def parallel_rounds(cfg) -> bool:
+    """La config demande-t-elle de planifier les rondes en parallèle ?"""
+    try:
+        return bool(cfg.llm.parallel_round)
+    except AttributeError:
+        return False
+
+
+def plan_round(env, by_agent: dict, pool: ThreadPoolExecutor | None) -> None:
+    """Fait planifier la ronde à tous les sièges qui savent le faire d'avance.
+
+    Seules les policies qui exposent `plan_ahead` (les LLM) sont concernées ;
+    une policy scriptée décide en microsecondes et n'a rien à gagner. Les
+    appels partent ensemble et l'on attend qu'ils soient TOUS rentrés : la ronde
+    dure alors le plus lent des quatre, et non leur somme.
+
+    L'ordre de jeu, lui, ne change pas — les coups restent soumis un siège
+    après l'autre par la boucle AEC. Seule l'attente du modèle est mise en
+    commun.
+    """
+    jobs = []
+    for agent in env.agents:
+        if env.terminations[agent] or env.truncations[agent]:
+            continue
+        # `get` : un siège sans policy (le joueur humain d'une session) n'a
+        # rien à planifier.
+        policy = by_agent.get(agent)
+        if policy is None or not hasattr(policy, "plan_ahead"):
+            continue
+        info = {**env.infos[agent], "catalog": env.catalog, "index": env.index,
+                "config": env.cfg}
+        jobs.append((policy, info))
+    if pool is None or len(jobs) < 2:
+        for policy, info in jobs:
+            policy.plan_ahead(info)
+        return
+    for future in [pool.submit(policy.plan_ahead, info) for policy, info in jobs]:
+        future.result()                               # propage une éventuelle erreur
+
+
+def _play_rounds(env, by_agent: dict, pool, max_steps: int) -> int:
+    """La boucle AEC canonique. Renvoie le nombre de pas joués."""
+    policies = list(by_agent.values())
+    steps = 0
+    reports_seen = 0
+    plan_round(env, by_agent, pool)                   # première ronde
+
+    for agent in env.agent_iter(max_iter=max_steps):
+        _observation, _reward, terminated, truncated, info = env.last()
+        if terminated or truncated:
+            env.step(None)
+            continue
+
+        # L'arène complète `infos` avec ce dont une policy a besoin pour décoder
+        # l'espace d'action. L'environnement, lui, n'en sait rien.
+        info = {**info, "catalog": env.catalog, "index": env.index, "config": env.cfg}
+        env.step(by_agent[agent].act(env.observe(agent), info))
+        steps += 1
+
+        new_round = reports_seen < len(env.turn_reports)
+        while reports_seen < len(env.turn_reports):
+            report = env.turn_reports[reports_seen]
+            reports_seen += 1
+            for policy in policies:
+                policy.observe_turn(report.to_dict())
+        # Une barrière vient de tomber : la ronde suivante commence. Les rapports
+        # ont été versés AVANT, pour que chaque policy planifie en les ayant lus.
+        if new_round and env.agents:
+            plan_round(env, by_agent, pool)
+    return steps
 
 
 def play_match(
@@ -64,26 +137,15 @@ def play_match(
 
     by_agent = dict(zip(env.possible_agents, policies))
     started = time.perf_counter()
-    steps = 0
-    reports_seen = 0
-
-    for agent in env.agent_iter(max_iter=max_steps):
-        _observation, _reward, terminated, truncated, info = env.last()
-        if terminated or truncated:
-            env.step(None)
-            continue
-
-        # L'arène complète `infos` avec ce dont une policy a besoin pour décoder
-        # l'espace d'action. L'environnement, lui, n'en sait rien.
-        info = {**info, "catalog": env.catalog, "index": env.index, "config": env.cfg}
-        env.step(by_agent[agent].act(env.observe(agent), info))
-        steps += 1
-
-        while reports_seen < len(env.turn_reports):
-            report = env.turn_reports[reports_seen]
-            reports_seen += 1
-            for policy in policies:
-                policy.observe_turn(report.to_dict())
+    pool = (
+        ThreadPoolExecutor(max_workers=len(policies), thread_name_prefix="ronde")
+        if parallel_rounds(env.cfg) else None
+    )
+    try:
+        steps = _play_rounds(env, by_agent, pool, max_steps)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
 
     result = {
         "seed": spec.seed,

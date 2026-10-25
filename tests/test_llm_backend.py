@@ -294,3 +294,15 @@ def test_each_seat_counts_only_its_own_calls_on_a_shared_backend():
     assert backend.stats.calls == 3                  # le cumul reste disponible
     # Ce qui s'additionne sur la campagne vaut bien le total réel.
     assert first_game.calls + second_game.calls == backend.stats.calls
+
+
+def test_a_content_filter_cut_is_classified_as_filtered():
+    """Le filtre du fournisseur n'est ni une réponse vide, ni une troncature :
+    il tombe quand le modèle raisonne sur une attaque, et biaise le banc."""
+    message = SimpleNamespace(tool_calls=None, content=None, reasoning="je vais attaquer Ambre pour")
+    backend = _backend([_choice_response(message, "content_filter")])
+    assert backend.complete("s", "u", TOOL) is None
+    assert backend.last_call.filtered and not backend.last_call.truncated
+    assert backend.last_call.error_kind == "filtered"
+    assert backend.stats.failures == {"filtered": 1}
+    assert backend.last_call.native_reasoning == "je vais attaquer Ambre pour"

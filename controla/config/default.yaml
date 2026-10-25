@@ -371,6 +371,14 @@ llm:
   seed: null            # déterminisme côté fournisseur, si supporté
   max_retries: 2        # retries SDK sur erreurs transitoires (429 / 5xx)
   plan_retries: 2       # relances APRÈS une sortie invalide, avec l'erreur précise
+  # Les dieux LLM d'une ronde planifient EN MÊME TEMPS au lieu de l'un après
+  # l'autre. Exact et non approché : rien n'est appliqué avant la barrière, et
+  # un coup soumis ne modifie que les points de son auteur — chaque dieu reçoit
+  # donc le prompt qu'il aurait reçu à son tour de parole. Une ronde dure alors
+  # le plus lent des appels, et non leur somme (~4× plus court à 4 sièges LLM).
+  # `false` pour revenir au séquentiel, par exemple si un fournisseur limite
+  # le nombre de requêtes simultanées.
+  parallel_round: true
   max_legal_listed: 60  # coups énumérés par famille dans le prompt (borne les tokens)
   # Mémoire inter-tours : rejouer à chaque appel les échanges des tours
   # précédents (état reçu + plan rendu). Défaut d'ÉTUDE, surchargé par modèle

@@ -28,6 +28,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from concurrent.futures import ThreadPoolExecutor
+
+from controla.arena.play import parallel_rounds, plan_round
 from controla.dynamics.scoring import final_report
 from controla.env.controla_env import ControlaEnv, agent_name, faction_id_of
 from controla.policies.factory import build_policies
@@ -66,6 +69,7 @@ class Session:
     started_at: float = field(default_factory=time.time)
     history: list[dict] = field(default_factory=list)
     _reports_seen: int = 0
+    _planned_round: int = -1
 
     # ── construction ─────────────────────────────────────────────────────────
 
@@ -134,11 +138,27 @@ class Session:
             if agent == self.human_agent:
                 return                                 # à lui de jouer
 
+            self._plan_round()
             info = {**info, "catalog": env.catalog, "index": env.index, "config": env.cfg}
             env.step(self.policies[agent].act(env.observe(agent), info))
             steps += 1
             self._drain_reports()
         self._drain_reports()
+
+    def _plan_round(self) -> None:
+        """Fait planifier ensemble les adversaires LLM, une fois par ronde.
+
+        Même mécanisme que `play_match` : le joueur humain n'attend plus trois
+        appels l'un après l'autre avant de récupérer la main.
+        """
+        turn = self.env.state_.turn
+        if turn == self._planned_round:
+            return
+        self._planned_round = turn
+        if not parallel_rounds(self.env.cfg):
+            return                                     # chaque IA planifiera à son tour
+        with ThreadPoolExecutor(max_workers=max(1, len(self.policies))) as pool:
+            plan_round(self.env, self.policies, pool)
 
     def submit(self, index: int, argument: str = "") -> None:
         """Enregistre un coup humain, puis laisse les IA reprendre la main."""

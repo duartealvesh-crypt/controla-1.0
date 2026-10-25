@@ -84,6 +84,12 @@ anthropic/claude-haiku-4.5:             # 1.000 / 5.000
 # xing et laguna-xs répondaient 429 la plupart du temps : quota partagé du
 # fournisseur saturé, pas le nôtre.
 #
+# ⚠ FILTRE DE CONTENU : son fournisseur (AtlasCloud) coupe parfois la génération
+# (`finish_reason: content_filter`) quand le modèle raisonne sur une attaque —
+# 2 tours perdus sur 15 dans une partie à 4 sièges, à chaque fois en décidant
+# d'attaquer. Bon pour tester le CODE ; pour MESURER des stratégies, il biaise
+# vers la paix. Les tours filtrés sont comptés à part (`filtered_turns`).
+#
 # « preview » : il peut disparaître du gratuit. Remplaçant mesuré :
 # nvidia/nemotron-3.5-lightning:free (aussi fiable, ~2× plus lent). Refaire le
 # banc avant de remplacer : `python -m controla.cli bench`.

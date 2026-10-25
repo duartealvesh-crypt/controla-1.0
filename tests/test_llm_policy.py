@@ -441,3 +441,25 @@ def test_a_truncated_answer_is_not_retried_blindly(context):
     record = policy.stats.reasonings[0]
     assert record["status"] == "truncated"
     assert record["native_reasoning"] == "je n'ai pas fini de"
+
+
+def test_a_filtered_answer_is_not_retried_and_is_reported(context):
+    """Mesuré : 6 relances d'un tour filtré, 6 filtrages. Relancer ne sert à rien."""
+    from controla.policies.llm.backend import CallOutcome
+
+    cfg, catalog, env, _view = context
+
+    class FilteredBackend(FakeBackend):
+        def complete(self, system, user, tool, history=(), sink=None):
+            super().complete(system, user, tool, history)
+            self.last_call = CallOutcome(finish_reason="content_filter", error_kind="filtered")
+            return None
+
+    policy = LLMPolicy(FilteredBackend([]), cfg, catalog)
+    policy.reset(0, 1)
+    agent = env.agent_selection
+    policy.act(env.observe(agent), info_of(env, agent))
+
+    assert len(policy.backend.prompts) == 1
+    assert policy.stats.filtered_turns == 1 and policy.stats.truncated_turns == 0
+    assert policy.stats.reasonings[0]["status"] == "filtered"
