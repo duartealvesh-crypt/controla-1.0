@@ -306,3 +306,15 @@ def test_a_content_filter_cut_is_classified_as_filtered():
     assert backend.last_call.error_kind == "filtered"
     assert backend.stats.failures == {"filtered": 1}
     assert backend.last_call.native_reasoning == "je vais attaquer Ambre pour"
+
+
+def test_reasoning_effort_is_sent_only_when_declared():
+    plain = _backend([_tool_response('{"plan": []}')])
+    plain.complete("s", "u", TOOL)
+    assert "extra_body" not in plain._client.calls[0]
+
+    low = _backend([_tool_response('{"plan": []}')], reasoning_effort="low", cache_control=True)
+    low.complete("s", "u", TOOL)
+    assert low._client.calls[0]["extra_body"] == {
+        "reasoning": {"effort": "low"}, "cache_control": {"type": "ephemeral"},
+    }

@@ -427,6 +427,8 @@ function renderReasoning(container, decisionTurn) {
       if (report.memory) badges.push(el('span', { class: 'badge ok' }, 'mémoire'));
       if (entry.status === 'truncated') {
         badges.push(el('span', { class: 'badge warn' }, 'tronqué (max_tokens)'));
+      } else if (entry.status === 'blank') {
+        badges.push(el('span', { class: 'badge warn' }, 'réponse vide'));
       } else if (entry.status === 'filtered') {
         badges.push(el('span', { class: 'badge warn' }, 'filtré par le fournisseur'));
       } else if (entry.status !== 'ok') {
@@ -621,7 +623,7 @@ function renderCampaign(manifest, games) {
       el('th', { class: 'num' }, 'tokens entrée/partie'),
       el('th', { class: 'num' }, 'cache'), el('th', { class: 'num' }, 'raisonnement'),
       el('th', { class: 'num' }, 'tours muets'), el('th', { class: 'num' }, 'dont tronqués'),
-      el('th', { class: 'num' }, 'dont filtrés'))));
+      el('th', { class: 'num' }, 'dont filtrés'), el('th', { class: 'num' }, 'dont vides'))));
     const tbody = el('tbody');
     for (const [name, report] of llmRows) {
       const llm = report.exactitude.llm;
@@ -637,7 +639,8 @@ function renderCampaign(manifest, games) {
         el('td', { class: 'num' }, llm.reasoning_tokens ?? '—'),
         el('td', { class: 'num' }, llm.mute_turns ?? 0),
         el('td', { class: 'num' }, llm.truncated_turns ?? 0),
-        el('td', { class: 'num' }, llm.filtered_turns ?? 0)));
+        el('td', { class: 'num' }, llm.filtered_turns ?? 0),
+        el('td', { class: 'num' }, llm.blank_turns ?? 0)));
     }
     table.append(tbody);
     body.append(table);

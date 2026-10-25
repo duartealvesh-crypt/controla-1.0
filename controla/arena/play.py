@@ -9,6 +9,7 @@ qui occupe un siège, la policy ignore qu'il y a un tournoi.
 
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -34,6 +35,9 @@ class MatchSpec:
     metadata: dict = field(default_factory=dict)
 
 
+logger = logging.getLogger("controla.arena")
+
+
 def parallel_rounds(cfg) -> bool:
     """La config demande-t-elle de planifier les rondes en parallèle ?"""
     try:
@@ -42,7 +46,7 @@ def parallel_rounds(cfg) -> bool:
         return False
 
 
-def plan_round(env, by_agent: dict, pool: ThreadPoolExecutor | None) -> None:
+def plan_round(env, by_agent: dict, pool: ThreadPoolExecutor | None) -> dict | None:
     """Fait planifier la ronde à tous les sièges qui savent le faire d'avance.
 
     Seules les policies qui exposent `plan_ahead` (les LLM) sont concernées ;
@@ -53,6 +57,11 @@ def plan_round(env, by_agent: dict, pool: ThreadPoolExecutor | None) -> None:
     L'ordre de jeu, lui, ne change pas — les coups restent soumis un siège
     après l'autre par la boucle AEC. Seule l'attente du modèle est mise en
     commun.
+
+    Renvoie la durée de la ronde et celle de chaque siège — `None` s'il n'y
+    avait rien à planifier (panel entièrement scripté). Le siège le plus lent
+    est ce qui fixe la durée d'une ronde parallèle : c'est lui qu'il faut
+    connaître pour dimensionner une campagne.
     """
     jobs = []
     for agent in env.agents:
@@ -65,21 +74,55 @@ def plan_round(env, by_agent: dict, pool: ThreadPoolExecutor | None) -> None:
             continue
         info = {**env.infos[agent], "catalog": env.catalog, "index": env.index,
                 "config": env.cfg}
-        jobs.append((policy, info))
-    if pool is None or len(jobs) < 2:
-        for policy, info in jobs:
+        jobs.append((agent, policy, info))
+    if not jobs:
+        return None
+
+    per_seat: dict[str, float] = {}
+
+    def timed(agent, policy, info):
+        started = time.perf_counter()
+        try:
             policy.plan_ahead(info)
-        return
-    for future in [pool.submit(policy.plan_ahead, info) for policy, info in jobs]:
-        future.result()                               # propage une éventuelle erreur
+        finally:
+            per_seat[agent] = round(time.perf_counter() - started, 3)
+
+    started = time.perf_counter()
+    if pool is None or len(jobs) < 2:
+        for job in jobs:
+            timed(*job)
+    else:
+        for future in [pool.submit(timed, *job) for job in jobs]:
+            future.result()                           # propage une éventuelle erreur
+    slowest = max(per_seat, key=per_seat.get)
+    timing = {
+        "turn": env.state_.turn,
+        "seconds": round(time.perf_counter() - started, 3),
+        "slowest": slowest,
+        "per_seat": dict(sorted(per_seat.items())),
+        "parallel": pool is not None and len(jobs) > 1,
+    }
+    logger.info(
+        "ronde T%s planifiée en %.1f s — plus lent : %s (%.1f s)",
+        timing["turn"], timing["seconds"], slowest, per_seat[slowest],
+    )
+    return timing
 
 
-def _play_rounds(env, by_agent: dict, pool, max_steps: int) -> int:
-    """La boucle AEC canonique. Renvoie le nombre de pas joués."""
+def _play_rounds(env, by_agent: dict, pool, max_steps: int,
+                 timings: list[dict]) -> int:
+    """La boucle AEC canonique. Renvoie le nombre de pas joués ; verse la durée
+    de chaque ronde dans `timings`."""
     policies = list(by_agent.values())
     steps = 0
     reports_seen = 0
-    plan_round(env, by_agent, pool)                   # première ronde
+
+    def plan() -> None:
+        timing = plan_round(env, by_agent, pool)
+        if timing is not None:
+            timings.append(timing)
+
+    plan()                                            # première ronde
 
     for agent in env.agent_iter(max_iter=max_steps):
         _observation, _reward, terminated, truncated, info = env.last()
@@ -102,7 +145,7 @@ def _play_rounds(env, by_agent: dict, pool, max_steps: int) -> int:
         # Une barrière vient de tomber : la ronde suivante commence. Les rapports
         # ont été versés AVANT, pour que chaque policy planifie en les ayant lus.
         if new_round and env.agents:
-            plan_round(env, by_agent, pool)
+            plan()
     return steps
 
 
@@ -141,8 +184,9 @@ def play_match(
         ThreadPoolExecutor(max_workers=len(policies), thread_name_prefix="ronde")
         if parallel_rounds(env.cfg) else None
     )
+    timings: list[dict] = []
     try:
-        steps = _play_rounds(env, by_agent, pool, max_steps)
+        steps = _play_rounds(env, by_agent, pool, max_steps, timings)
     finally:
         if pool is not None:
             pool.shutdown(wait=True)
@@ -164,6 +208,11 @@ def play_match(
     }
     if world is not None:
         result["world"] = world
+    if timings:
+        # Une entrée par ronde où un siège LLM a planifié : durée de la ronde,
+        # siège le plus lent, durée de chaque siège. Écrit dans le JSONL, donc
+        # disponible pour toute partie archivée.
+        result["round_timings"] = timings
 
     # Les policies qui savent se rendre des comptes (LLM) versent leurs métriques :
     # taux d'action invalide, tours muets, latence. Sans elles, un modèle muet

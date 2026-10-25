@@ -259,6 +259,7 @@ class LLMBackend:
         default_headers: dict[str, str] | None = None,
         label: str | None = None,
         cache_control: bool = False,
+        reasoning_effort: str | None = None,
     ):
         if not _AVAILABLE:                            # pragma: no cover
             raise ImportError(
@@ -277,6 +278,11 @@ class LLMBackend:
         # dernier bloc — exactement ce qu'il faut à une conversation qui grandit
         # par ajouts successifs.
         self.cache_control = cache_control
+        # Profondeur de réflexion demandée aux modèles à raisonnement
+        # (`low` / `medium` / `high`, paramètre `reasoning` d'OpenRouter). C'est
+        # LE levier de latence : mesuré sur dots-3-note, 80 % des tokens de
+        # sortie sont de la réflexion, et la sortie fait l'essentiel du temps.
+        self.reasoning_effort = reasoning_effort
         self.stats = CallStats()
         # Les quatre dieux d'une ronde planifient en parallèle, et deux sièges du
         # même modèle partagent ce backend. Ses compteurs cumulés sont donc
@@ -327,8 +333,13 @@ class LLMBackend:
             )
             if value is not None
         }
+        extra: dict = {}
         if self.cache_control:
-            options["extra_body"] = {"cache_control": {"type": "ephemeral"}}
+            extra["cache_control"] = {"type": "ephemeral"}
+        if self.reasoning_effort:
+            extra["reasoning"] = {"effort": self.reasoning_effort}
+        if extra:
+            options["extra_body"] = extra
         return options
 
     def complete(

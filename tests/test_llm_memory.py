@@ -198,3 +198,9 @@ def test_factory_builds_a_variant_with_its_own_seat_and_memory(monkeypatch):
     assert remembering.name == "openai/gpt-5-nano@memoire"
     # Deux backends : chaque variante garde ses propres compteurs de tokens.
     assert plain.backend is not remembering.backend
+
+
+def test_an_unknown_reasoning_effort_is_refused():
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        validate_entry("x", {"provider": "openrouter", "reasoning_effort": "minimal"})
+    validate_entry("x", {"provider": "openrouter", "reasoning_effort": "low"})

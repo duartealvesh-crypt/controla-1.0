@@ -48,8 +48,11 @@ def cmd_play(args: argparse.Namespace) -> int:
         build_policies(seats, cfg, catalog),
         config=cfg,
     )
-    for agent, report in result.get("policy_reports", {}).items():
-        print(f"[{agent}] {report}", file=sys.stderr)
+    from controla.replay.render import render_llm_usage
+
+    usage = render_llm_usage(result)
+    if usage:
+        print(usage, file=sys.stderr)
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -286,6 +289,8 @@ def _flags(entry: dict) -> str:
         flags.append("mémoire")
     if entry.get("cache_control"):
         flags.append("cache explicite")
+    if entry.get("reasoning_effort"):
+        flags.append(f"réflexion {entry['reasoning_effort']}")
     return "  ".join(flags)
 
 

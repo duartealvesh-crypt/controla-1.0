@@ -463,3 +463,31 @@ def test_a_filtered_answer_is_not_retried_and_is_reported(context):
     assert len(policy.backend.prompts) == 1
     assert policy.stats.filtered_turns == 1 and policy.stats.truncated_turns == 0
     assert policy.stats.reasonings[0]["status"] == "filtered"
+
+
+# ── réponses vides ──────────────────────────────────────────────────────────
+
+def test_a_blank_answer_is_retried_with_a_precise_note(context):
+    """Ni coup ni raisonnement : ce n'est pas un choix de passer son tour."""
+    cfg, catalog, env, view = context
+    legal = next(item["index"] for item in view["legal_actions"] if item["cost"] > 0)
+    policy = make_policy(context, [
+        {"plan": []},
+        {"plan": [{"index": legal}], "reasoning": "je joue"},
+    ])
+    agent = env.agent_selection
+    assert policy.act(env.observe(agent), info_of(env, agent)) == legal
+    assert policy.stats.blank_answers == 1 and policy.stats.retries == 1
+    assert policy.stats.empty_plans == 0 and policy.stats.mute_turns == 0
+    assert "réponse était vide" in policy.backend.prompts[1][1]
+
+
+def test_two_blank_answers_lose_the_turn_and_say_why(context):
+    cfg, catalog, env, _view = context
+    policy = make_policy(context, [{"plan": []}, {"plan": [], "reasoning": "  "}, {"plan": []}])
+    agent = env.agent_selection
+    assert policy.act(env.observe(agent), info_of(env, agent)) == env.index.end_turn_index
+    assert len(policy.backend.prompts) == 2, "une seule relance pour une réponse vide"
+    assert policy.stats.blank_turns == 1 and policy.stats.mute_turns == 1
+    assert policy.stats.empty_plans == 0, "un tour perdu n'est pas un choix de passer"
+    assert policy.stats.reasonings[0]["status"] == "blank"

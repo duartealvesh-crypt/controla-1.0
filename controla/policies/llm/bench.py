@@ -333,4 +333,5 @@ def make_backend(model: str, cfg, entry: dict | None = None) -> LLMBackend:
         max_retries=0,
         default_headers=provider_headers(provider),
         cache_control=bool(entry.get("cache_control", False)),
+        reasoning_effort=entry.get("reasoning_effort"),
     )

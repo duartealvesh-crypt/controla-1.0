@@ -121,3 +121,49 @@ def test_a_shared_backend_loses_no_count_under_concurrency():
     assert all(sink.calls == 200 for sink in sinks)
     # `last_call` est propre à chaque thread : huit objets distincts.
     assert len({id(outcome) for outcome in outcomes}) == 8
+
+
+def _play_with_delays(parallel: bool, delays: list[float], max_turns: int = 3):
+    cfg = load_config(overrides={"llm": {"parallel_round": parallel},
+                                 "world": {"max_turns": max_turns}})
+    catalog = build_catalog(cfg)
+    policies = [LLMPolicy(RecordingBackend(name, delay), cfg, catalog)
+                for name, delay in zip(SEATS, delays)]
+    return play_match(MatchSpec(seed=7, seats=SEATS), policies, config=cfg)
+
+
+def test_each_round_records_its_duration_and_slowest_seat():
+    """La durée d'une ronde parallèle est celle de son siège le plus lent."""
+    result = _play_with_delays(parallel=True, delays=[0.01, 0.01, 0.15, 0.01])
+    timings = result["round_timings"]
+    assert [t["turn"] for t in timings] == [0, 1, 2]
+    for timing in timings:
+        assert timing["slowest"] == "god_2"
+        assert set(timing["per_seat"]) == {"god_0", "god_1", "god_2", "god_3"}
+        assert timing["seconds"] < sum(timing["per_seat"].values())   # chevauchement
+        assert timing["parallel"] is True
+    # Chaque décision connaît aussi sa propre durée.
+    reasoning = result["policy_reports"]["god_2"]["reasonings"][0]
+    assert reasoning["seconds"] >= 0.15
+
+
+def test_sequential_rounds_last_the_sum_of_their_seats():
+    result = _play_with_delays(parallel=False, delays=[0.05] * 4, max_turns=2)
+    for timing in result["round_timings"]:
+        assert timing["parallel"] is False
+        assert timing["seconds"] >= sum(timing["per_seat"].values()) * 0.95
+
+
+def test_a_scripted_panel_records_no_round_timing():
+    """Rien à attendre, rien à mesurer : le JSONL d'un sweep reste inchangé."""
+    from tests.helpers import run_scripted_match
+
+    assert "round_timings" not in run_scripted_match(seed=3)
+
+
+def test_usage_summary_reports_tokens_losses_and_rounds():
+    from controla.replay.render import render_llm_usage
+
+    result = _play_with_delays(parallel=True, delays=[0.0] * 4, max_turns=2)
+    summary = render_llm_usage(result)
+    assert "god_0" in summary and "rondes : 2" in summary

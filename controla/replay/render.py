@@ -276,3 +276,51 @@ def render_sweep(manifest: dict) -> str:
         "  abc = les trois critères §13 : o atteint · X manqué · . non évalué",
     ]
     return "\n".join(lines)
+
+
+def render_llm_usage(result: dict) -> str:
+    """Tokens et temps d'une partie, siège LLM par siège LLM, puis par ronde.
+
+    Le rapport complet d'une policy (raisonnements compris) pèse des centaines
+    de kilo-octets : il a sa place dans le JSON, pas dans un terminal.
+    """
+    reports = result.get("policy_reports") or {}
+    if not reports:
+        return ""
+    seats = list(result.get("seats", []))
+    lines = ["── Sièges LLM ──────────────────────────────────────────────────────",
+             f"  {'siège':10s} {'appels':>6s} {'entrée':>8s} {'cache':>6s} {'sortie':>7s} "
+             f"{'dont raisonn.':>13s} {'lat. moy':>8s} {'lat. max':>8s}  pertes"]
+    for agent, report in reports.items():
+        backend, policy = report.get("backend", {}), report.get("policy", {})
+        lost = []
+        for key, label in (("mute_turns", "muets"), ("truncated_turns", "tronqués"),
+                           ("filtered_turns", "filtrés"), ("blank_turns", "vides"),
+                           ("blank_answers", "réponses vides relancées")):
+            if policy.get(key):
+                lost.append(f"{policy[key]} {label}")
+        mem = " · mémoire" if report.get("memory") else ""
+        cache = backend.get("cache_hit_rate")
+        lines.append(
+            f"  {agent:10s} {backend.get('calls', 0):6d} {backend.get('prompt_tokens', 0):8d} "
+            f"{'—' if cache is None else f'{cache:.0%}':>6s} {backend.get('completion_tokens', 0):7d} "
+            f"{backend.get('reasoning_tokens', 0):13d} "
+            f"{_seconds(backend.get('latency_mean'))} {_seconds(backend.get('latency_max'))}  "
+            f"{', '.join(lost) or '—'}{mem}"
+        )
+    timings = result.get("round_timings") or []
+    if timings:
+        durations = [t["seconds"] for t in timings]
+        worst = max(timings, key=lambda t: t["seconds"])
+        lines.append(
+            f"  rondes : {len(timings)} · durée moyenne {sum(durations) / len(durations):.1f} s · "
+            f"max {worst['seconds']:.1f} s (tour {worst['turn']}, siège le plus lent "
+            f"{worst['slowest']}) · total {sum(durations) / 60:.1f} min"
+            + ("" if all(t.get("parallel") for t in timings) else " · séquentiel")
+        )
+    lines.append(f"  partie : {result.get('wall_seconds', 0) / 60:.1f} min au total")
+    return "\n".join(lines)
+
+
+def _seconds(value) -> str:
+    return f"{'—':>8s}" if value is None else f"{value:7.1f}s"

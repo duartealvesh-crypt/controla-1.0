@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 from controla.policies.base import Policy, action
@@ -54,6 +55,18 @@ logger = logging.getLogger("controla.llm.policy")
 # tout l'historique, et le taire ferait croire au modèle qu'il avait joué.
 MUTE_MEMORY = "[aucun plan exploitable rendu ce tour-là — tour perdu]"
 
+# Une réponse vide — aucun coup ET aucun raisonnement — n'est pas un choix de
+# passer son tour : mesuré sur dots-3-note, son raisonnement interne concluait
+# par un plan de quatre coups, puis le tool call arrivait vide. ~15 % des tours
+# étaient ainsi perdus en étant comptés comme des décisions. On la relance une
+# fois, avec cette consigne ; un plan vide ACCOMPAGNÉ d'un raisonnement reste,
+# lui, un choix légitime.
+BLANK_ANSWER_NOTE = (
+    "ta réponse était vide : aucun coup et aucun raisonnement. Si tu choisis "
+    "de ne rien jouer, explique pourquoi dans 'reasoning' ; sinon, donne ton plan."
+)
+BLANK_RETRIES = 1
+
 
 @dataclass
 class PolicyStats:
@@ -64,6 +77,10 @@ class PolicyStats:
     rejected_moves: int = 0        # index hors de la liste légale au moment de jouer
     empty_plans: int = 0           # le modèle a répondu, mais n'a rien joué
     mute_turns: int = 0            # aucune réponse exploitable après relances
+    # Réponses vides (ni coup ni raisonnement), relancées ou non, et sous-ensemble
+    # des tours muets qu'elles ont coûtés une fois la relance épuisée.
+    blank_answers: int = 0
+    blank_turns: int = 0
     # Sous-ensemble des tours muets : le plafond de sortie a coupé le modèle. Ce
     # n'est pas une défaillance du modèle mais un réglage trop serré — à
     # distinguer, sans quoi on classe un modèle capable comme défaillant.
@@ -92,6 +109,8 @@ class PolicyStats:
             ),
             "empty_plans": self.empty_plans,
             "mute_turns": self.mute_turns,
+            "blank_answers": self.blank_answers,
+            "blank_turns": self.blank_turns,
             "truncated_turns": self.truncated_turns,
             "filtered_turns": self.filtered_turns,
             "retries": self.retries,
@@ -186,6 +205,10 @@ class LLMPolicy(Policy):
         note: str | None = None
         user = ""
         attempts = 0
+        blanks = 0
+        # Durée MURALE du tour, relances comprises : c'est ce que le joueur — ou
+        # la ronde — attend réellement, pas la latence d'un appel isolé.
+        self._turn_started = time.perf_counter()
 
         for attempt in range(int(self.cfg.llm.plan_retries) + 1):
             attempts = attempt + 1
@@ -225,6 +248,12 @@ class LLMPolicy(Policy):
                 continue
 
             plan, problem = self._validate(payload, legal, index)
+            if problem is None and not plan and not str(payload.get("reasoning") or "").strip():
+                self.stats.blank_answers += 1
+                blanks += 1
+                if blanks > BLANK_RETRIES:
+                    break                              # deuxième réponse vide : on s'arrête
+                problem = BLANK_ANSWER_NOTE
             if problem is None:
                 self._record(view, payload, plan, outcome=outcome, attempts=attempts)
                 self._remember(user, self._memory_entry(payload, plan))
@@ -248,8 +277,11 @@ class LLMPolicy(Policy):
             self.name, self.faction_id, view["turn"],
         )
         outcome = getattr(self.backend, "last_call", None)
+        if blanks > BLANK_RETRIES:
+            self.stats.blank_turns += 1
         status = (
-            "truncated" if getattr(outcome, "truncated", False)
+            "blank" if blanks > BLANK_RETRIES
+            else "truncated" if getattr(outcome, "truncated", False)
             else "filtered" if getattr(outcome, "filtered", False)
             else "mute"
         )
@@ -366,6 +398,7 @@ class LLMPolicy(Policy):
             "native_reasoning": self._clip(getattr(outcome, "native_reasoning", None)),
             "finish_reason": getattr(outcome, "finish_reason", None),
             "attempts": attempts,
+            "seconds": round(time.perf_counter() - getattr(self, "_turn_started", time.perf_counter()), 3),
             "plan": [move["index"] for move in plan],
         })
 

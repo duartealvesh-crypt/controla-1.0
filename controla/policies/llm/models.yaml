@@ -103,6 +103,19 @@ dots-studio/dots-3-note-preview:free@memoire:
   tool_support: true
   memory: true
 
+# Même modèle, réflexion courte. MESURÉ le 2026-10-25 : PAS de gain.
+#   4 sièges, seed 3 : 12.6 min contre 10.3 (réflexion 2 100 tokens/appel
+#   contre 1 806) ; 1 siège, seed 1 : 7.6 min contre 6.5, score 105.7 contre
+#   109.9, palier 2 au lieu de 3, et plus de plans vides sans raisonnement.
+# Un mini-banc de 2 appels montrait pourtant une réflexion divisée par deux :
+# sur une partie entière, le fournisseur ne la raccourcit pas. Gardé pour
+# refaire la mesure sur un autre modèle — ne pas en faire le défaut.
+dots-studio/dots-3-note-preview:free@low:
+  model: dots-studio/dots-3-note-preview:free
+  provider: openrouter
+  tool_support: true
+  reasoning_effort: low
+
 nvidia/nemotron-3.5-lightning:free:     # remplaçant — 0 / 0
   provider: openrouter
   tool_support: true
