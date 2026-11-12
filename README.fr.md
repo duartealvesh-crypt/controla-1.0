@@ -19,6 +19,8 @@ publiée ici). Les écarts assumés et les mesures d'équilibrage sont dans
 
 ---
 
+![Visionneuse de replay : carte, factions et événements du tour](docs/img/ui-replay.png)
+
 ## Les deux principes qui portent tout
 
 **1. Le dieu agit DIRECTEMENT sur le monde, INDIRECTEMENT sur son peuple.**

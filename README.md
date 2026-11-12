@@ -12,9 +12,7 @@ breaking one's word.
 > CLI) is in French: **[README.fr.md](README.fr.md)**. Balancing notes:
 > [docs/FINDINGS.md](docs/FINDINGS.md).
 
-<!-- Screenshots: save them as docs/img/ui-replay.png and docs/img/ui-campaign.png, then uncomment.
-![Replay viewer: map, events and each god's reasoning](docs/img/ui-replay.png)
--->
+![Replay viewer: map, factions and the turn's events](docs/img/ui-replay.png)
 
 ## Highlights
 
