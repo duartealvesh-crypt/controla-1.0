@@ -32,6 +32,28 @@ function glyphOf(key, world) {
   return table[key] || (key ? key[0].toUpperCase() : '?');
 }
 
+/* Sprites pixel art (provisoires, cf. controla/ui/make_sprites.py), un par clé
+ * du catalogue. Une clé sans sprite — terrain ou bâtiment d'un mod — garde son
+ * glyphe : la carte reste lisible sans asset. */
+const SPRITES = new Set(['plain', 'river', 'forest', 'city', 'lab', 'camp', 'field']);
+
+function iconOf(key, world) {
+  return SPRITES.has(key)
+    ? el('img', { class: 'sprite', src: `/static/sprites/${key}.png`, alt: glyphOf(key, world) })
+    : el('span', { class: 'glyph' }, glyphOf(key, world));
+}
+
+/* Légende commune au replay et au mode jouable : terrains puis bâtiments. */
+function legendIcons(world, terrainKeys, buildingKeys, labels) {
+  const entry = (key, icon) => el('span', { class: 'dim legend-item' },
+    icon, labels[key] || key);
+  return [
+    ...terrainKeys.map((key) => entry(key, SPRITES.has(key)
+      ? iconOf(key, world) : el('span', { class: `swatch t-${key}` }))),
+    ...buildingKeys.map((key) => entry(key, iconOf(key, world))),
+  ];
+}
+
 function setStatus(text, kind = '') {
   const node = $('#status');
   node.textContent = text || '';
@@ -216,21 +238,29 @@ function renderMap(container, world, board) {
     const owner = board.owner[i];
     const buildingIndex = board.building[i];
     const terrain = world.terrain_keys[world.terrain[i]];
+    const x = i % size;
+    const y = Math.floor(i / size);
     const classes = ['tile', `t-${terrain}`];
-    if (owner >= 0) classes.push('owned', `o${owner}`);
+    if (owner >= 0) {
+      classes.push('owned', `o${owner}`);
+      // Frontière : un côté dont la case voisine (ou le bord) n'est pas à nous.
+      const other = (nx, ny) => nx < 0 || ny < 0 || nx >= size || ny >= size
+        || board.owner[ny * size + nx] !== owner;
+      if (other(x, y - 1)) classes.push('bn');
+      if (other(x + 1, y)) classes.push('be');
+      if (other(x, y + 1)) classes.push('bs');
+      if (other(x - 1, y)) classes.push('bw');
+    }
     if (owner >= 0 && atWar.has(owner)) classes.push('war');
 
     const buildingKey = buildingIndex >= 0 ? world.building_keys[buildingIndex] : null;
-    const glyph = buildingKey ? glyphOf(buildingKey, world) : '';
-    const x = i % size;
-    const y = Math.floor(i / size);
     const ownerName = owner >= 0 ? (world.factions[owner] || {}).name : 'neutre';
     container.append(el('div', {
       class: classes.join(' '),
       'data-x': x, 'data-y': y,
       title: `(${x},${y}) · ${world.labels[terrain] || terrain} · ${ownerName}` +
              (buildingKey ? ` · ${world.labels[buildingKey] || buildingKey}` : ''),
-    }, glyph));
+    }, buildingKey ? iconOf(buildingKey, world) : null));
   }
 }
 
@@ -245,11 +275,8 @@ function renderLegend(container) {
       el('span', { class: 'swatch', style: `background: var(--f${faction.id})` }),
       faction.name));
   }
-  for (const key of ctx.building_keys) {
-    container.append(el('span', { class: 'dim' },
-      `${glyphOf(key, world)} = ${ctx.labels[key] || key}`));
-  }
-  container.append(el('span', { class: 'dim' }, '□ liseré blanc = en guerre'));
+  container.append(...legendIcons(world, ctx.terrain_keys || [], ctx.building_keys, ctx.labels));
+  container.append(el('span', { class: 'dim' }, '┄ frontière en pointillés blancs = en guerre'));
 }
 
 function renderFactions(container, world, board, ranking) {
@@ -840,10 +867,8 @@ function renderLegendFor(container, world) {
       el('span', { class: 'swatch', style: `background: var(--f${faction.id})` }),
       faction.name));
   }
-  for (const key of world.building_keys || []) {
-    container.append(el('span', { class: 'dim' },
-      `${glyphOf(key, world)} = ${world.labels[key] || key}`));
-  }
+  container.append(...legendIcons(world, world.terrain_keys || [],
+    world.building_keys || [], world.labels));
 }
 
 function renderEventsForSession(container) {
