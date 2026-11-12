@@ -227,7 +227,10 @@ function names(game) {
 function renderMap(container, world, board) {
   const size = world.size;
   container.replaceChildren();
-  container.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+  // Lignes ET colonnes fixées (minmax(0, …) : le contenu ne peut pas élargir
+  // une piste) — sinon une ligne avec bâtiment grandit et les cases s'étirent.
+  container.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
+  container.style.gridTemplateRows = `repeat(${size}, minmax(0, 1fr))`;
 
   const atWar = new Set();
   for (const faction of board.factions || []) {
