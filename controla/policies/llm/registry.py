@@ -97,11 +97,12 @@ def provider_credentials(provider: str) -> tuple[str, str]:
 # et l'étude mémoire comparerait deux variantes… sans mémoire.
 ENTRY_KEYS = frozenset({
     "provider", "tool_support", "model", "memory", "cache_control",
-    "reasoning_effort",
+    "reasoning_effort", "tool_choice",
     "temperature", "max_tokens", "timeout", "seed", "max_retries",
 })
 
 REASONING_EFFORTS = ("low", "medium", "high")
+TOOL_CHOICES = ("forced", "auto")
 
 
 def api_model(seat: str, entry: dict) -> str:
@@ -128,6 +129,12 @@ def validate_entry(seat: str, entry: dict) -> None:
         raise ValueError(
             f"models.yaml, '{seat}' : `reasoning_effort` doit valoir "
             f"{' / '.join(REASONING_EFFORTS)}, reçu {effort!r}"
+        )
+    choice = entry.get("tool_choice")
+    if choice is not None and choice not in TOOL_CHOICES:
+        raise ValueError(
+            f"models.yaml, '{seat}' : `tool_choice` doit valoir "
+            f"{' / '.join(TOOL_CHOICES)}, reçu {choice!r}"
         )
     for flag in ("memory", "cache_control", "tool_support"):
         if flag in entry and not isinstance(entry[flag], bool):
@@ -181,6 +188,7 @@ def get_backend(
         label=model_name,
         cache_control=bool(entry.get("cache_control", False)),
         reasoning_effort=entry.get("reasoning_effort"),
+        tool_choice=entry.get("tool_choice", "forced"),
         tool_support=bool(entry.get("tool_support", True)),
         timeout=float(setting("timeout", 60.0)),
         temperature=setting("temperature", 0.7),

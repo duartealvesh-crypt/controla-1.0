@@ -175,8 +175,122 @@ def observe(cfg, catalog: Catalog, state: GameState, index: ActionIndex,
 
 # ── vue structurée (pour le prompt LLM et le replay) ────────────────────────
 
+def _tile_facts(state: GameState, target) -> dict | None:
+    """Ce qu'un dieu voit d'une case visée : tout cela est public (§11).
+
+    Sans cela, un miracle se visait à l'aveugle : le prompt ne donnait que des
+    coordonnées, et l'on a mesuré des désastres tombant sur le mauvais rival.
+    """
+    if not (isinstance(target, tuple) and len(target) == 2):
+        return None
+    tile = state.grid.get(*target)
+    return {
+        "owner": None if tile.owner is None else state.faction(tile.owner).name,
+        "owner_id": tile.owner,
+        "terrain": tile.terrain,
+        "building": tile.building,
+    }
+
+
+def turn_digest(catalog: Catalog, state: GameState, report, faction_id: int) -> dict | None:
+    """Ce que CE dieu a pu constater du dernier tour, en lignes lisibles.
+
+    Sans ce compte rendu, un dieu ne voyait que l'état présent : un modèle a écrit
+    « sans incident » pendant qu'on lui prenait deux cases, ses expansions masquant
+    ses pertes.
+
+    Le brouillard reste entier : ses propres actes, ce qui lui est arrivé, et ce
+    qui est public. Ni la Force ni les pertes adverses, ni les coups des rivaux,
+    ni les armées en transit. Un désastre subi est constaté sans son auteur.
+    """
+    if report is None:
+        return None
+
+    def name(other: int) -> str:
+        return state.faction(other).name
+
+    def place(coord) -> str:
+        return f"({coord[0]},{coord[1]})"
+
+    def target_text(target) -> str:
+        if target is None:
+            return ""
+        if isinstance(target, int):
+            return f" sur {name(target)}"
+        if len(target) == 2:
+            return f" en {place(target)}"
+        partner, commitment, _victim = target
+        return f" vers {name(partner)} ({commitment})"
+
+    played: list[str] = []
+    lines: list[str] = []
+    for event in report.events:
+        kind = event.get("kind")
+        mine = event.get("faction") == faction_id
+        if kind == "divine_action":
+            target = event.get("target")
+            label = catalog.label(event["action"])
+            if mine:
+                played.append(label + target_text(target))
+            elif (
+                isinstance(target, (tuple, list)) and len(target) == 2
+                and state.grid.get(*target).owner == faction_id
+            ):
+                lines.append(f"Ta case {place(target)} a subi : {label}.")
+        elif kind == "expansion" and mine:
+            lines.append(f"Ton peuple a colonisé {place(event['tile'])}.")
+        elif kind == "build" and mine:
+            lines.append(
+                f"Ton peuple a bâti {catalog.label(event['building'])} "
+                f"en {place(event['tile'])}."
+            )
+        elif kind == "research_tier" and mine:
+            lines.append(f"Palier de recherche {event['tier']} atteint.")
+        elif kind == "trade" and faction_id in event["factions"]:
+            partner = next(f for f in event["factions"] if f != faction_id)
+            lines.append(f"Échange commercial avec {name(partner)}.")
+        elif kind == "war_launched" and mine:
+            lines.append(
+                f"Ton peuple a lancé un assaut sur {name(event['target'])} "
+                f"en {place(event['tile'])}."
+            )
+        elif kind in ("disease", "natural_disaster", "discovery") and mine:
+            lines.append(f"Événement : {event['cause']}.")
+        elif kind == "commitment_formed" and faction_id in event["parties"]:
+            partner = next(f for f in event["parties"] if f != faction_id)
+            lines.append(f"Engagement {event['commitment']} conclu avec {name(partner)}.")
+        elif kind == "commitment_betrayed" and faction_id in event.get("parties", ()):
+            who = "Tu as" if mine else f"{name(event['faction'])} a"
+            lines.append(f"{who} rompu l'engagement {event['commitment']}.")
+        elif kind == "elimination":
+            lines.append(f"{name(event['faction'])} est éliminé.")
+
+    for battle in report.battles:
+        allied = faction_id in battle.get("allies", ())
+        if faction_id == battle["attacker"] or allied:
+            enemy = name(battle["defender"])
+            won = battle["attacker_won"]
+            text = f"Bataille contre {enemy} (tu attaquais) : {'victoire' if won else 'défaite'}"
+            if faction_id == battle["attacker"]:
+                text += f", {battle['attacker_losses']:.1f} morts chez toi"
+        elif faction_id == battle["defender"]:
+            enemy = name(battle["attacker"])
+            won = not battle["attacker_won"]
+            text = (
+                f"{enemy} t'a attaqué : {'victoire' if won else 'défaite'}, "
+                f"{battle['defender_losses']:.1f} morts chez toi"
+            )
+        else:
+            continue
+        if battle.get("annexed"):
+            text += f", case {place(battle['annexed'])} annexée par {name(battle['attacker'])}"
+        lines.append(text + ".")
+
+    return {"turn": report.turn, "played": played, "lines": lines}
+
+
 def build_view(cfg, catalog: Catalog, state: GameState, index: ActionIndex,
-               faction_id: int) -> dict:
+               faction_id: int, last_report=None) -> dict:
     """La même information, sous une forme lisible. Transportée par `infos`."""
     me = state.faction(faction_id)
     entries = legal_entries(cfg, state, faction_id, index)
@@ -269,7 +383,9 @@ def build_view(cfg, catalog: Catalog, state: GameState, index: ActionIndex,
                 "target": entry.target,
                 "cost": entry.spec.cost,
                 "label": entry.describe(state),
+                "tile": _tile_facts(state, entry.target),
             }
             for entry in entries
         ],
+        "last_turn": turn_digest(catalog, state, last_report, faction_id),
     }

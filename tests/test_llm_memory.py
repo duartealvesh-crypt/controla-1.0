@@ -204,3 +204,9 @@ def test_an_unknown_reasoning_effort_is_refused():
     with pytest.raises(ValueError, match="reasoning_effort"):
         validate_entry("x", {"provider": "openrouter", "reasoning_effort": "minimal"})
     validate_entry("x", {"provider": "openrouter", "reasoning_effort": "low"})
+
+
+def test_an_unknown_tool_choice_is_refused():
+    with pytest.raises(ValueError, match="tool_choice"):
+        validate_entry("x", {"provider": "openrouter", "tool_choice": "required"})
+    validate_entry("x", {"provider": "openrouter", "tool_choice": "auto"})

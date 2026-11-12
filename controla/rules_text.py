@@ -130,6 +130,7 @@ def render_rules(cfg, catalog: Catalog) -> str:
             f"  {formulas['force']}",
             f"  {formulas['engaged_force']}",
             f"  {formulas['combat']}",
+            f"  {formulas['war_state']}",
             f"  {formulas['attrition']}",
             f"  {formulas['conquest']}",
         ],

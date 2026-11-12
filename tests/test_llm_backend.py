@@ -318,3 +318,28 @@ def test_reasoning_effort_is_sent_only_when_declared():
     assert low._client.calls[0]["extra_body"] == {
         "reasoning": {"effort": "low"}, "cache_control": {"type": "ephemeral"},
     }
+
+
+# ── tool_choice : forcé ou libre ────────────────────────────────────────────
+
+def test_tool_choice_is_forced_by_default_and_auto_on_request():
+    forced = _backend([_tool_response('{"plan": []}')])
+    forced.complete("s", "u", TOOL)
+    assert forced._client.calls[0]["tool_choice"]["function"]["name"] == "plan_turn"
+
+    free = _backend([_tool_response('{"plan": []}')], tool_choice="auto")
+    free.complete("s", "u", TOOL)
+    assert free._client.calls[0]["tool_choice"] == "auto"
+
+
+def test_auto_mode_reads_a_plan_written_as_json_text():
+    """Un plan rendu dans le texte reste un plan : pas de relance payée pour ça."""
+    backend = _backend([_text_response('```json\n{"reasoning": "r", "plan": [3]}\n```')],
+                       tool_choice="auto")
+    assert backend.complete("s", "u", TOOL) == {"reasoning": "r", "plan": [3]}
+
+
+def test_auto_mode_classifies_prose_without_tool_call():
+    backend = _backend([_text_response("Je pense attaquer Ambre ce tour.")], tool_choice="auto")
+    assert backend.complete("s", "u", TOOL) is None
+    assert backend.last_call.error_kind == "no_tool"

@@ -260,6 +260,7 @@ class LLMBackend:
         label: str | None = None,
         cache_control: bool = False,
         reasoning_effort: str | None = None,
+        tool_choice: str = "forced",
     ):
         if not _AVAILABLE:                            # pragma: no cover
             raise ImportError(
@@ -283,6 +284,13 @@ class LLMBackend:
         # LE levier de latence : mesuré sur dots-3-note, 80 % des tokens de
         # sortie sont de la réflexion, et la sortie fait l'essentiel du temps.
         self.reasoning_effort = reasoning_effort
+        # `forced` impose l'appel de `plan_turn` : la forme est garantie, mais un
+        # modèle Claude ne réfléchit PAS avant un outil forcé (« the response
+        # starts with the tool call and has no thinking block », doc Anthropic) —
+        # mesuré : 0 token de réflexion sur une partie entière de Sonnet 5.
+        # `auto` laisse le modèle réfléchir puis choisir l'outil ; il peut alors
+        # répondre en texte, cas rattrapé plus bas puis relancé par la policy.
+        self.tool_choice = tool_choice
         self.stats = CallStats()
         # Les quatre dieux d'une ronde planifient en parallèle, et deux sièges du
         # même modèle partagent ce backend. Ses compteurs cumulés sont donc
@@ -407,6 +415,7 @@ class LLMBackend:
             kind = (
                 "truncated" if self.last_call.truncated
                 else "filtered" if self.last_call.filtered
+                else "no_tool" if self._answered_in_prose(response)
                 else "empty"
             )
             self.last_call.error_kind = kind
@@ -414,6 +423,7 @@ class LLMBackend:
             logger.warning("[%s] réponse %s", self.label, {
                 "truncated": "tronquée par max_tokens",
                 "filtered": "coupée par le filtre de contenu du fournisseur",
+                "no_tool": "en texte, sans appeler l'outil",
             }.get(kind, "vide ou non parsable"))
             return None
         self._record(sinks, "record", elapsed)
@@ -437,17 +447,33 @@ class LLMBackend:
             f"schéma, sans texte autour :\n{json.dumps(schema, ensure_ascii=False)}"
         )
 
+    def _answered_in_prose(self, response) -> bool:
+        """En `auto`, le modèle a-t-il répondu en texte au lieu d'appeler l'outil ?"""
+        if self.tool_choice != "auto" or not getattr(response, "choices", None):
+            return False
+        message = response.choices[0].message
+        return not getattr(message, "tool_calls", None) and bool(
+            (getattr(message, "content", None) or "").strip()
+        )
+
     def _call_with_tool(self, messages: list[dict], tool: dict) -> tuple[dict | None, object]:
+        choice = (
+            "auto" if self.tool_choice == "auto"
+            else {"type": "function", "function": {"name": tool["function"]["name"]}}
+        )
         response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
             tools=[tool],
-            tool_choice={"type": "function",
-                         "function": {"name": tool["function"]["name"]}},
+            tool_choice=choice,
             **self._sampling(),
         )
         calls = getattr(response.choices[0].message, "tool_calls", None)
         if not calls:
+            if self.tool_choice == "auto":
+                # Un plan écrit en JSON dans le texte reste un plan : le lire
+                # évite de payer une relance pour une simple erreur de canal.
+                return _parse_json_text(response.choices[0].message.content), response
             return None, response
         try:
             return json.loads(calls[0].function.arguments), response
@@ -461,19 +487,25 @@ class LLMBackend:
         response = self._client.chat.completions.create(
             model=self.model, messages=messages, **self._sampling(),
         )
-        content = (response.choices[0].message.content or "").strip()
-        content = re.sub(r"^```(?:json)?\s*", "", content)
-        content = re.sub(r"\s*```$", "", content).strip()
-        if not content:
-            return None, response
+        return _parse_json_text(response.choices[0].message.content), response
+
+
+def _parse_json_text(content: str | None) -> dict | None:
+    """Un objet JSON rendu en texte, clôtures de code comprises — ou `None`."""
+    content = (content or "").strip()
+    content = re.sub(r"^```(?:json)?\s*", "", content)
+    content = re.sub(r"\s*```$", "", content).strip()
+    if not content:
+        return None
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        # Dernier recours : isoler le premier objet JSON du texte.
+        match = re.search(r"\{.*\}", content, re.S)
+        if not match:
+            return None
         try:
-            return json.loads(content), response
+            parsed = json.loads(match.group())
         except json.JSONDecodeError:
-            # Dernier recours : isoler le premier objet JSON du texte.
-            match = re.search(r"\{.*\}", content, re.S)
-            if not match:
-                return None, response
-            try:
-                return json.loads(match.group()), response
-            except json.JSONDecodeError:
-                return None, response
+            return None
+    return parsed if isinstance(parsed, dict) else None

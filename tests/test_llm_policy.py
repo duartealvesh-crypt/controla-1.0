@@ -316,7 +316,7 @@ def test_reasoning_is_captured_for_the_replay(context):
 
 def test_plan_tool_schema_is_well_formed():
     parameters = PLAN_TOOL["function"]["parameters"]
-    assert parameters["required"] == ["plan"]
+    assert parameters["required"] == ["reasoning", "plan"]
     assert parameters["properties"]["plan"]["items"]["required"] == ["index"]
 
 
@@ -514,3 +514,152 @@ def test_an_empty_plan_with_debris_reasoning_is_retried(context):
     agent = env.agent_selection
     assert policy.act(env.observe(agent), info_of(env, agent)) == legal
     assert policy.stats.blank_answers == 1 and policy.stats.empty_plans == 0
+
+
+# ── ce que le prompt dit au dieu ────────────────────────────────────────────
+
+def _view_at_turn(cfg, catalog, turn, seed=5):
+    """La vue du siège 0 au tour voulu, après une partie scriptée jusque-là."""
+    from controla.policies.archetypes import build_policy
+
+    env = ControlaEnv(config=cfg)
+    env.reset(seed=seed)
+    policies = dict(zip(env.possible_agents,
+                        map(build_policy, ("turtle", "conqueror", "expansionist", "conqueror"))))
+    for faction, policy in enumerate(policies.values()):
+        policy.reset(faction, seed)
+    for agent in env.agent_iter(max_iter=100_000):
+        _obs, _reward, terminated, truncated, info = env.last()
+        if terminated or truncated:
+            env.step(None)
+            continue
+        if agent == "god_0" and info["view"]["turn"] == turn:
+            return info["view"]
+        full = {**info, "catalog": env.catalog, "index": env.index, "config": env.cfg}
+        env.step(policies[agent].act(env.observe(agent), full))
+    raise AssertionError(f"tour {turn} jamais atteint")
+
+
+def test_every_tile_target_names_its_owner_and_terrain():
+    """Un miracle visé à l'aveugle tombait sur le mauvais rival."""
+    cfg = base_config()
+    catalog = build_catalog(cfg)
+    view = _view_at_turn(cfg, catalog, 4)
+    user = build_user(cfg, catalog, view)
+    terrains = {catalog.label(key).lower() for key in catalog.terrain_keys}
+    for item in view["legal_actions"]:
+        facts = item["tile"]
+        if facts is None:
+            continue
+        match = re.search(rf"\[{item['index']}\] ([^\[\n]*)", user)
+        if match is None:
+            continue                                  # liste tronquée, et annoncée
+        text = match.group(1)
+        assert any(terrain in text for terrain in terrains), text
+        if facts["owner"] is not None and facts["owner_id"] != view["faction_id"]:
+            assert facts["owner"] in text, text
+
+
+def test_the_research_axis_shows_its_real_score_value():
+    """Points et palier côte à côte : un modèle a multiplié les mauvais."""
+    cfg = base_config()
+    catalog = build_catalog(cfg)
+    view = _view_at_turn(cfg, catalog, 0)
+    view["self"].update(research=12.5, research_tier=2)
+    user = build_user(cfg, catalog, view)
+    assert "12.5 pts de progression" in user
+    assert "2 × 10 = 20" in user
+    assert "palier suivant à 18" in user
+
+
+def test_the_digest_reports_what_happened_to_me_and_nothing_else():
+    from controla.dynamics.development import TurnReport
+    from controla.env.observation import turn_digest
+
+    cfg = base_config()
+    catalog = build_catalog(cfg)
+    env = ControlaEnv(config=cfg)
+    env.reset(seed=5)
+    report = TurnReport(turn=3)
+    battle = dict(attacker_won=True, attacker_losses=1.0, defender_losses=9.0,
+                  annexed=[1, 2], allies=[], attacker_force=77.0, defender_force=55.0)
+    report.battles = [
+        {**battle, "attacker": 2, "defender": 0},
+        {**battle, "attacker": 1, "defender": 3},
+    ]
+    report.events = [
+        {"kind": "divine_action", "faction": 0, "action": "call_to_arms", "target": None},
+        {"kind": "divine_action", "faction": 1, "action": "call_to_war", "target": 2},
+        {"kind": "expansion", "faction": 0, "tile": [3, 0]},
+        {"kind": "expansion", "faction": 1, "tile": [7, 0]},
+        {"kind": "war_launched", "faction": 3, "target": 0, "tile": [0, 0]},
+    ]
+    digest = turn_digest(catalog, env.state_, report, 0)
+    text = " ".join(digest["lines"])
+    assert digest["played"] == [catalog.label("call_to_arms")], "ses coups, pas ceux des autres"
+    assert "t'a attaqué : défaite" in text and "annexée" in text and "9.0 morts" in text
+    assert "(3,0)" in text
+    assert "(7,0)" not in text, "l'expansion d'un rival ne se raconte pas ici"
+    assert "77" not in text and "55" not in text, "la Force adverse reste cachée"
+    assert state_names_only_involved(env, text, involved={2})
+    assert "(0,0)" not in text, "une armée en transit reste cachée"
+
+
+def state_names_only_involved(env, text, involved):
+    """Aucun rival étranger à ce dieu n'est nommé (la bataille 1→3 ne le regarde pas)."""
+    return all(
+        (faction.name in text) == (faction.id in involved)
+        for faction in env.state_.factions if faction.id != 0
+    )
+
+
+def test_a_move_that_could_not_be_played_is_reported_next_turn(context):
+    """Sans ce retour, un modèle a répété le même dépassement neuf tours de suite."""
+    cfg, catalog, env, view = context
+    costly = [item for item in view["legal_actions"] if item["cost"] > 0][:1][0]
+    policy = make_policy(context, [
+        {"plan": [{"index": costly["index"]}], "reasoning": "premier tour de jeu"},
+        {"plan": [], "reasoning": "je garde mes points ce tour"},
+    ])
+    agent = env.agent_selection
+    info = info_of(env, agent)
+    policy.act(env.observe(agent), info)
+    # Le coup devient injouable avant d'être soumis : il est retiré du masque.
+    policy._plan = [{"index": costly["index"], "argument": ""}]
+    shrunk = {**info, "view": {**view, "legal_actions": [
+        item for item in view["legal_actions"] if item["index"] != costly["index"]
+    ]}}
+    policy.act(env.observe(agent), shrunk)
+    later = {**shrunk, "view": {**shrunk["view"], "turn": view["turn"] + 1}}
+    policy.act(env.observe(agent), later)
+    prompt = policy.backend.prompts[-1][1]
+    assert "NON joués" in prompt and costly["label"] in prompt
+
+
+def test_the_rules_state_that_war_never_ends():
+    """Un modèle a dépensé ses négociations à chercher une paix qui n'existe pas."""
+    cfg = base_config()
+    system = build_system(cfg, build_catalog(cfg))
+    assert "ni paix ni armistice" in system
+
+
+def test_a_prose_answer_is_retried_with_the_expected_channel(context):
+    from controla.policies.llm.backend import CallOutcome
+
+    cfg, catalog, env, view = context
+    legal = next(item["index"] for item in view["legal_actions"] if item["cost"] > 0)
+
+    class ProseFirst(FakeBackend):
+        def complete(self, system, user, tool, history=(), sink=None):
+            payload = super().complete(system, user, tool, history)
+            self.last_call = CallOutcome(
+                finish_reason="stop", error_kind=None if payload else "no_tool",
+            )
+            return payload
+
+    policy = LLMPolicy(ProseFirst([None, {"plan": [{"index": legal}], "reasoning": "je joue ce coup"}]),
+                       cfg, catalog)
+    policy.reset(0, 1)
+    agent = env.agent_selection
+    assert policy.act(env.observe(agent), info_of(env, agent)) == legal
+    assert "outil plan_turn" in policy.backend.prompts[1][1]

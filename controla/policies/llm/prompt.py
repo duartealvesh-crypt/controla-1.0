@@ -37,8 +37,9 @@ PLAN_TOOL: dict = {
                 "reasoning": {
                     "type": "string",
                     "description": (
-                        "Ton raisonnement stratégique : pourquoi ces coups servent "
-                        "ta position à long terme."
+                        "Ta justification stratégique, en quelques phrases, écrite "
+                        "AVANT le plan : ce que tu constates, ce que tu vises, et "
+                        "pourquoi ces coups y mènent."
                     ),
                 },
                 "plan": {
@@ -68,7 +69,7 @@ PLAN_TOOL: dict = {
                     },
                 },
             },
-            "required": ["plan"],
+            "required": ["reasoning", "plan"],
         },
     },
 }
@@ -118,16 +119,33 @@ def _format_traits(traits: dict, catalog: Catalog) -> str:
     )
 
 
-def _format_self(view: dict, catalog: Catalog) -> str:
+def _format_research(me: dict, cfg) -> str:
+    tier = me["research_tier"]
+    tiers = list(cfg.research.tiers)
+    weight = float(cfg.score.weights.research)
+    following = (
+        f", palier suivant à {tiers[tier]:g} pts" if tier < len(tiers) else ", palier maximal"
+    )
+    return (
+        f"Recherche : {me['research']} pts de progression{following}. "
+        f"Palier {tier}/{len(tiers)} — au score, seuls les paliers comptent : "
+        f"{tier} × {weight:g} = {tier * weight:g}"
+    )
+
+
+def _format_self(view: dict, catalog: Catalog, cfg) -> str:
     me = view["self"]
     buildings = ", ".join(f"{catalog.label(k)}×{v}" for k, v in sorted(me["buildings"].items()))
     war = {k: v for k, v in me["war_desire"].items() if v > 0.01}
     return (
+        # La progression et le palier côte à côte induisaient en erreur : un modèle
+        # a multiplié ses POINTS par le poids du palier et surestimé son score de
+        # 80 points. On écrit donc le calcul.
         f"─── TON PEUPLE : {me['name']} " + "─" * 30 + "\n"
         f"Population {me['population']}   Force {me['force']}   "
         f"faim {me['hunger']:.0%}   ardeur au combat {me['engaged_fraction']:.0%}\n"
         f"Nourriture {me['food']}   Bois {me['wood']}   Métal {me['metal']}\n"
-        f"Recherche {me['research']} (palier {me['research_tier']})   "
+        f"{_format_research(me, cfg)}\n"
         f"Territoire {me['tiles']} cases   Bâtiments : {buildings or 'aucun'}\n"
         f"Traits : {_format_traits(me['traits'], catalog)}\n"
         f"Envie de guerre de ton peuple : {war or 'aucune'}\n"
@@ -168,6 +186,40 @@ def _format_rivals(view: dict, catalog: Catalog) -> str:
     return "\n".join(blocks) or "  (aucun rival)"
 
 
+def _format_target(item: dict, catalog: Catalog, me: int) -> str:
+    """Une cible en clair. Pour une case : à qui, quel terrain, quel ouvrage."""
+    label = item["label"].split("→", 1)[1].strip() if "→" in item["label"] else "—"
+    tile = item.get("tile")
+    if not tile:
+        return label
+    facts = []
+    if tile["owner"] is not None and tile["owner_id"] != me:
+        facts.append(tile["owner"])
+    facts.append(catalog.label(tile["terrain"]).lower())
+    if tile["building"]:
+        facts.append(catalog.label(tile["building"]).lower())
+    return f"{label} {', '.join(facts)}"
+
+
+def _format_last_turn(view: dict, dropped: list[str] | None) -> str:
+    """Ce que le dieu a pu constater du tour écoulé — et ce qui n'a pas été joué."""
+    digest = view.get("last_turn")
+    if not digest and not dropped:
+        return "  (première ronde : rien à rapporter)"
+    lines = []
+    if digest:
+        played = ", ".join(digest["played"]) or "aucun"
+        lines.append(f"  Coups joués : {played}")
+    if dropped:
+        lines.append(
+            "  Coups de ton plan NON joués (points épuisés ou cible devenue "
+            f"impossible) : {', '.join(dropped)}"
+        )
+    if digest:
+        lines.extend(f"  • {line}" for line in digest["lines"])
+    return "\n".join(lines)
+
+
 def _format_legal_actions(view: dict, catalog: Catalog, limit: int) -> str:
     """Énumère les coups légaux, groupés par action.
 
@@ -184,8 +236,7 @@ def _format_legal_actions(view: dict, catalog: Catalog, limit: int) -> str:
         cost = items[0]["cost"]
         shown = items[:limit]
         entries = "  ".join(
-            f"[{item['index']}] "
-            + (item["label"].split("→", 1)[1].strip() if "→" in item["label"] else "—")
+            f"[{item['index']}] {_format_target(item, catalog, view['faction_id'])}"
             for item in shown
         )
         header = f"{action_key} ({cost} pt{'s' if cost > 1 else ''})"
@@ -195,8 +246,14 @@ def _format_legal_actions(view: dict, catalog: Catalog, limit: int) -> str:
     return "\n".join(blocks)
 
 
-def build_user(cfg, catalog: Catalog, view: dict, retry_note: str | None = None) -> str:
-    """Le message utilisateur : l'état du tour et les coups jouables."""
+def build_user(cfg, catalog: Catalog, view: dict, retry_note: str | None = None,
+               dropped: list[str] | None = None) -> str:
+    """Le message utilisateur : l'état du tour et les coups jouables.
+
+    `dropped` : les coups du plan précédent que l'arène n'a pas pu jouer. Seule
+    la policy le sait, puisque c'est elle qui vide le plan. Sans ce retour, un
+    modèle a répété le même dépassement de budget neuf tours de suite.
+    """
     turns_left = view["max_turns"] - view["turn"]
     pending = view["pending"]
     pending_text = (
@@ -226,7 +283,9 @@ def build_user(cfg, catalog: Catalog, view: dict, retry_note: str | None = None)
     return (
         f"═══ TOUR {view['turn']}/{view['max_turns']} "
         f"— {turns_left} tours restants " + "═" * 20 + "\n\n"
-        f"{_format_self(view, catalog)}\n\n"
+        f"{_format_self(view, catalog, cfg)}\n\n"
+        "─── DEPUIS TA DERNIÈRE DÉCISION " + "─" * 24 + "\n"
+        f"{_format_last_turn(view, dropped)}\n\n"
         "─── RIVAUX " + "─" * 45 + "\n"
         f"{_format_rivals(view, catalog)}\n\n"
         "─── MESSAGES REÇUS " + "─" * 37 + "\n"

@@ -68,6 +68,13 @@ BLANK_ANSWER_NOTE = (
 )
 BLANK_RETRIES = 1
 
+# Avec `tool_choice: auto`, le modèle peut répondre en texte. On le relance en
+# lui rappelant le canal attendu, plutôt que de perdre son tour.
+NO_TOOL_NOTE = (
+    "tu as répondu en texte. Réponds en appelant l'outil plan_turn, avec ta "
+    "justification dans 'reasoning' et tes coups dans 'plan'."
+)
+
 # Un raisonnement compte s'il contient au moins une vraie phrase : ce seuil de
 # mots écarte les fragments de sortie cassée observés en partie réelle — `": "`,
 # `":dots_ellipsis"`, `"}]"` — qu'un simple test « non vide » laissait passer.
@@ -158,9 +165,14 @@ class LLMPolicy(Policy):
         self._plan: list[dict] = []
         self._planned_turn = -1
         self._history: list[dict] = []
+        # Les coups du dernier plan que l'arène n'a pas pu jouer, à lui rapporter.
+        self._dropped: list[str] = []
+        self._labels: dict[int, str] = {}
 
     def reset(self, faction_id: int, seed: int) -> None:
         self.faction_id = faction_id
+        self._dropped = []
+        self._labels = {}
         self._plan = []
         self._planned_turn = -1
         # Une partie neuve est une conversation neuve : la mémoire ne traverse
@@ -205,6 +217,7 @@ class LLMPolicy(Policy):
             # Coup devenu injouable (budget dépassé, cible disparue) : on le compte
             # et on passe au suivant, sans jamais lui substituer un coup au hasard.
             self.stats.rejected_moves += 1
+            self._dropped.append(self._labels.get(move["index"], f"index {move['index']}"))
             logger.info(
                 "[%s F%s T%s] coup %s hors du masque au moment de jouer — ignoré",
                 self.name, self.faction_id, view["turn"], move["index"],
@@ -218,6 +231,8 @@ class LLMPolicy(Policy):
         """Un appel, plus des relances ciblées si la sortie est inexploitable."""
         self.stats.turns += 1
         legal = {item["index"] for item in view["legal_actions"]}
+        self._labels = {item["index"]: item["label"] for item in view["legal_actions"]}
+        dropped, self._dropped = self._dropped, []
         note: str | None = None
         user = ""
         attempts = 0
@@ -228,7 +243,7 @@ class LLMPolicy(Policy):
 
         for attempt in range(int(self.cfg.llm.plan_retries) + 1):
             attempts = attempt + 1
-            user = build_user(self.cfg, self.catalog, view, retry_note=note)
+            user = build_user(self.cfg, self.catalog, view, retry_note=note, dropped=dropped)
             payload = self.backend.complete(
                 system=self._system,
                 user=user,
@@ -240,6 +255,10 @@ class LLMPolicy(Policy):
 
             if payload is None:
                 kind = getattr(outcome, "error_kind", None)
+                if kind == "no_tool":
+                    note = NO_TOOL_NOTE
+                    self.stats.retries += 1
+                    continue
                 if kind in ("truncated", "filtered", "fatal"):
                     # Relancer à l'identique ne sert à rien : un appel tronqué
                     # le sera encore (même prompt, même plafond), un appel
@@ -347,6 +366,7 @@ class LLMPolicy(Policy):
             # Plan partiellement bon : on le garde et on compte les rejets, plutôt
             # que de relancer et de payer un appel de plus.
             self.stats.rejected_moves += len(unknown)
+            self._dropped.extend(f"index {move} absent de la liste" for move in unknown)
         return plan, None
 
     # ── mémoire ─────────────────────────────────────────────────────────────

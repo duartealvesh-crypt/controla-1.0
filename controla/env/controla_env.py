@@ -147,7 +147,8 @@ class ControlaEnv(AECEnv):
         """
         self.infos[agent] = {
             "view": obs_module.build_view(
-                self.cfg, self.catalog, self.state_, self.index, faction_id_of(agent)
+                self.cfg, self.catalog, self.state_, self.index, faction_id_of(agent),
+                last_report=self.turn_reports[-1] if self.turn_reports else None,
             ),
             "invalid_actions": self.invalid_actions[agent],
         }

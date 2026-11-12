@@ -403,6 +403,13 @@ def describe_formulas(cfg) -> dict[str, str]:
             "Ce délai est la fenêtre de réaction du défenseur, s'il voit venir "
             "l'attaque — la distance protège donc, sans mettre à l'abri."
         ),
+        "war_state": (
+            "L'état de guerre est PERMANENT : il n'existe ni paix ni armistice, et "
+            "aucune négociation ne le lève. Il n'oblige pourtant personne à frapper : "
+            "un peuple n'attaque que lorsque son envie de guerre franchit le seuil, "
+            "et cette envie retombe d'elle-même. Entre deux dieux en guerre, plus "
+            "aucune attaque ne bénéficie du bonus de surprise."
+        ),
         "conquest": (
             "Une victoire annexe la case visée et prélève une part des stocks du "
             "vaincu, d'autant plus grande que la marge est nette. Le vainqueur "

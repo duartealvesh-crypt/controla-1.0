@@ -289,6 +289,8 @@ def _flags(entry: dict) -> str:
         flags.append("mémoire")
     if entry.get("cache_control"):
         flags.append("cache explicite")
+    if entry.get("tool_choice") == "auto":
+        flags.append("outil libre (réflexion possible)")
     if entry.get("reasoning_effort"):
         flags.append(f"réflexion {entry['reasoning_effort']}")
     return "  ".join(flags)
