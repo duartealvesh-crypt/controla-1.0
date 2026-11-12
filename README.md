@@ -1,354 +1,141 @@
 # Controla
 
-Arène **god-4X pour benchmark de LLM** : quatre dieux, chacun piloté par un modèle,
-règnent sur un peuple semi-autonome et s'affrontent sur une petite carte.
+**A multi-agent strategy arena for benchmarking LLMs.** Four gods, each driven by
+a model (or a scripted policy), rule semi-autonomous peoples on a small map for 15
+turns. They expand, research, trade, negotiate binding commitments, and go to war.
 
-Ce qu'on mesure : la **cohérence stratégique long-horizon**, le raisonnement sous
-incertitude, et surtout la **théorie de l'esprit** — négocier, anticiper, honorer ou
-trahir. Le projet est un banc d'essai, pas un jeu commercial.
+What it measures: **long-horizon strategic coherence**, reasoning under
+uncertainty, and **theory of mind** — negotiating, anticipating, keeping or
+breaking one's word.
 
-L'arène est une vraie arène de reinforcement learning : `pettingzoo.utils.env.AECEnv`,
-espaces `gymnasium`, espace d'action plat masqué, reward, seeding auditable. Un agent
-RL, une policy scriptée et un LLM s'y branchent par la même interface.
+> 📖 The full documentation (design principles, rules, architecture, calibration,
+> CLI) is in French: **[README.fr.md](README.fr.md)**. Balancing notes:
+> [docs/FINDINGS.md](docs/FINDINGS.md).
 
-La spec canonique est [`docs/DESIGN.md`](docs/DESIGN.md). Les écarts assumés et les
-mesures d'équilibrage sont dans [`docs/FINDINGS.md`](docs/FINDINGS.md).
+<!-- Screenshots: save them as docs/img/ui-replay.png and docs/img/ui-campaign.png, then uncomment.
+![Replay viewer: map, events and each god's reasoning](docs/img/ui-replay.png)
+-->
 
----
+## Highlights
 
-## Les deux principes qui portent tout
+- **A real RL environment.** PettingZoo `AECEnv`, gymnasium spaces, flat masked
+  action space. LLMs, scripted policies and RL agents plug in through the same
+  interface.
+- **Truly simultaneous turns.** Every god's moves are buffered until a round
+  barrier, so playing last reveals nothing.
+- **Fair by construction.** Randomness is keyed on `(seed, turn, purpose, faction)`
+  via `blake2b`, never on call order. A test proves that one god playing three
+  extra moves changes nothing for the others. Seats rotate so that every
+  participant plays every corner once per seed.
+- **Self-describing rules.** Every resource, terrain, trait, building and action
+  is a declarative descriptor. The engine executes it, and the rulebook, the LLM
+  prompt and the legal-action mask are generated from it. Adding a mod is adding a
+  descriptor.
+- **Ranking and metrics.** OpenSkill (`μ − 3σ`), plus five benchmark metrics:
+  word-keeping, move accuracy, strategic coherence, alliances and survival.
+- **Calibrated.** Parameter sweeps run on scripted panels with zero LLM calls,
+  against three explicit balance criteria (no dominant strategy, betrayal is
+  punished, skill beats chance by 24.6 ordinal points).
+- **Provider-agnostic LLM layer.** Any OpenAI-compatible API (OpenRouter by
+  default). Per-model options: cross-turn **memory** (append-only history whose
+  stable prefix is served by the **prompt cache**), Anthropic `cache_control`,
+  reasoning effort, forced or free tool choice. The 4 seats plan **in parallel**,
+  and token, cache and latency usage is tracked per seat.
+- **Web UI** (FastAPI + vanilla JS): turn-by-turn replay with each god's
+  reasoning, campaign dashboard, and a playable seat for humans.
+- **361 tests**, including PettingZoo API compliance, determinism, conservation
+  invariants, and a check that a memory history is an exact prefix of the next
+  call's, which the cache depends on.
 
-**1. Le dieu agit DIRECTEMENT sur le monde, INDIRECTEMENT sur son peuple.**
-Ses miracles frappent les cases. Sur son peuple, il ne donne **aucun ordre** : il
-incline des *traits*, et le peuple agit de lui-même dans la passe de développement.
+## First results on real models
 
-**2. Le peuple est non-agentique.** Aucun autopilote, aucune seconde IA. Ce qui
-ressemble à « le peuple agit » n'est que des règles plus l'aléa de la passe. Mais
-*indirect ≠ aléatoire* : les règles driver → comportement sont déterministes et
-lisibles. On cache les **coefficients**, jamais les **causes**.
+Exploratory, **one seed per configuration**: these numbers validate the
+measurement pipeline and give orders of magnitude. They are not a leaderboard.
 
-## Installation
+### Free-model bench
+
+11 free OpenRouter models were discovered automatically, each given 6 real game
+prompts, with one attempt and no retry:
+
+![Free model bench](docs/img/free-model-bench.svg)
+
+Four models return 6/6 valid plans. Most failures come from the free tier's
+shared rate limits, not from rule comprehension.
+
+### Claude Sonnet 5: forced tool vs. reasoning
+
+Same model, same seed, same memory and prompt cache, against three scripted
+opponents. The only difference is how it answers: a forced tool call (which rules
+out extended thinking on Anthropic models) or a free tool choice with medium
+reasoning effort.
+
+| | Forced tool | Reasoning |
+|---|---|---|
+| Cost per game (1 seat) | $0.228 | $0.315 |
+| Game duration | 1.5 min | 2.7 min |
+| Prompt served from cache | 88 % | 88 % |
+| Reasoning tokens | 0 | 7,769 (~520 / turn) |
+| Rejected moves (over budget) | 9 / 76 | **0 / 65** |
+| Rank · score | 3rd · 103.2 | **2nd · 121.8** |
+
+The prompt was also improved between the two games (report of the previous
+turn's events, details on targeted tiles), so the gap mixes both effects. Reading
+the reasoning traces of the second game:
+
+- it tracks research to the decimal and **stops investing once the last tier is
+  reached**, showing it understood that the score counts tiers, not points;
+- it reacts to a war declaration, then to an attack, and anticipates a famine;
+- on turn 7 it targets the wrong rival. On turn 8, thanks to **memory** and the
+  recap of played moves, it **notices and corrects its own mistake**.
+
+A four-seat Sonnet game costs about $1.25 with prompt caching.
+
+### Other findings
+
+- **Parallel rounds** cut a 4-LLM game from ~31 to ~11 minutes. Prompts are
+  identical to sequential play, and a test checks this.
+- **Provider content filters introduce a bias.** One free model's provider cuts
+  some answers that plan an attack, which would silently push the model toward
+  peace. These turns are counted separately as *filtered*, distinct from model
+  errors.
+
+## Quick start
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Brancher un fournisseur de modèles
-
-Le backend est un client **OpenAI-compatible générique** : ajouter un
-fournisseur, c'est ajouter deux variables d'environnement, jamais du code.
-
-```bash
-cp .env.example .env
-```
-
-Le défaut est **OpenRouter** — une seule clé donne accès aux modèles de tous les
-éditeurs derrière la même API, ce qui est exactement ce que demande un banc qui
-*compare* des modèles.
-
-Avant toute campagne, vérifier le registre contre le catalogue réel du
-fournisseur :
-
-```bash
-python -m controla.cli models --check
-```
-
-La commande répond trois choses, et sort en code 1 si l'une cloche : le modèle
-**existe-t-il**, à **quel prix** (avec le coût extrapolé d'une campagne), et
-**accepte-t-il les réglages déclarés**.
-
-Ce troisième point n'est pas cosmétique. Plusieurs modèles récents refusent
-`temperature` ; le paramètre est alors ignoré **en silence**. Un panel où la
-moitié des sièges joue à 0.7 et l'autre au défaut du fournisseur mesure le
-réglage autant que le modèle. D'où les `temperature: null` explicites de
-`models.yaml`, et une commande qui les vérifie plutôt que de les croire.
-
-## Choisir un modèle de test
-
-Pour vérifier le code et le respect des règles, il faut un modèle **gratuit et
-rapide** — pas le meilleur. Le choix se fait en trois étages, du moins cher au
-plus cher, chacun ne retenant que ce que le précédent a validé :
-
-1. **Banc** — chaque candidat reçoit les mêmes vrais prompts de jeu (3 tours
-   d'une partie scriptée à seed fixée), au premier essai, sans relance :
-
-   ```bash
-   python -m controla.cli bench --dry-run
-   ```
-
-   ```bash
-   python -m controla.cli bench
-   ```
-
-   Sans `--models`, la commande découvre elle-même les modèles gratuits
-   d'OpenRouter qui annoncent `tools` + `tool_choice` et tiennent 90 % de
-   disponibilité sur 24 h. Elle mesure pour chacun : le plan arrive-t-il, sa
-   forme est-elle lisible, ses index sont-ils légaux, son plan tient-il dans ses
-   points — puis la latence. Résultats détaillés dans `runs/bench/`.
-
-2. **Une partie** — le premier du classement contre trois archétypes (15
-   appels), puis relecture dans `cli ui` : ses raisonnements disent-ils ce
-   que ses coups font ?
-
-3. **Une petite campagne** seulement ensuite.
-
-Le quota du palier gratuit dimensionne tout : **20 requêtes/minute, 50 par
-jour** sans crédit acheté, **1 000 par jour** une fois 10 $ de crédits achetés
-(les modèles gratuits restent gratuits). Le banc complet coûte ~36 requêtes,
-une partie à un siège LLM 15.
-
-## Étude : la mémoire inter-tours
-
-Par défaut, un dieu LLM n'a **aucune mémoire** : chaque appel ne voit que le
-règlement et l'état du tour. Il ignore ce qu'il a planifié, promis ou écrit la
-veille. Le paramètre `memory: true` d'une entrée de `models.yaml` rejoue à
-chaque tour la conversation des tours précédents — l'état reçu, le plan rendu.
-
-C'est un paramètre d'**étude** : une *variante* (`model:` pointant vers le même
-modèle) occupe un siège à part, classé séparément. On oppose ainsi un modèle à
-lui-même, la mémoire étant la seule différence :
-
-```bash
-python -m controla.cli tournament --seeds 1,2,3,4,5,6 --policies openai/gpt-5-nano,openai/gpt-5-nano@memoire,cooperator,turtle
-```
-
-La conversation ne fait que **s'allonger** : son préfixe est identique d'un
-appel à l'autre, donc servi par le cache de prompt du fournisseur (implicite
-chez OpenAI, DeepSeek, Gemini ; `cache_control: true` pour Anthropic). Le
-tableau de campagne donne, siège par siège, les tokens d'entrée par partie et
-la part servie par le cache — de quoi chiffrer ce que la mémoire coûte, à côté
-de ce qu'elle rapporte au classement.
-
-Ce qui est rejoué est la réponse que le modèle a **rendue**, pas son
-raisonnement interne : seuls les modèles à réflexion en ont un, et le rejouer
-donnerait aux uns une mémoire plus riche qu'aux autres.
-
-## Interface web
-
-```bash
-python -m controla.cli ui
-```
-
-Trois usages d'un même moteur, sur `http://127.0.0.1:8000` :
-
-* **replay** — rejouer une partie tour par tour : carte, factions, événements
-  datés de leur cause, batailles, et le raisonnement de chaque dieu LLM ;
-* **campagne** — classement OpenSkill, les cinq métriques §12, les trois
-  critères §13 ;
-* **jouer** — prendre un siège soi-même contre le panel scripté ou contre des
-  modèles. Une partie jouée à la main n'entre dans aucun classement : elle sert
-  à sentir l'équilibrage de l'intérieur.
-
-Le serveur est **local et sans authentification** — aucun chemin hors du dossier
-servi n'est lisible, mais ne l'exposez pas pour autant.
-
-La carte d'un replay vient d'un **instantané enregistré**, pas d'une
-reconstruction à partir des événements : une déduction diverge en silence le
-jour où une règle nouvelle oublie son événement. Les campagnes en portent
-d'office ; pour une partie isolée, `play --snapshots`.
-
-## Utilisation
-
-Le règlement complet, **dérivé des seuls descripteurs** — c'est aussi la partie
-statique du prompt LLM :
-
-```bash
-python -m controla.cli describe
-```
-
-Une partie entre archétypes scriptés, avec son replay :
+A game between scripted archetypes, with its text replay:
 
 ```bash
 python -m controla.cli play --seed 42 --policies cooperator,betrayer,expansionist,turtle
 ```
 
-Stocker une partie puis la rejouer :
+The web UI on `http://127.0.0.1:8000`:
 
 ```bash
-python -m controla.cli play --seed 42 --out runs/game.json --journal --snapshots
+python -m controla.cli ui
 ```
 
-```bash
-python -m controla.cli replay runs/game.json
-```
-
-Une campagne classée : chaque participant joue **chaque coin exactement une fois par
-seed**, sans quoi le classement mesurerait en partie la position.
+To use LLMs, copy `.env.example` to `.env` and add an OpenRouter key, then check
+the model registry against the provider's live catalogue:
 
 ```bash
-python -m controla.cli tournament --policies cooperator,betrayer,expansionist,turtle --seeds 1,2,3,4,5,6
-```
-
-Elle écrit un JSONL par partie et un `manifest.json` dans `runs/<horodatage>/`.
-Chaque partie s'y rejoue telle quelle :
-
-```bash
-python -m controla.cli replay runs/<run>/game_0000.jsonl
-```
-
-Calibrer — un levier de constante à la fois, panel scripté, **zéro appel LLM** :
-
-```bash
-python -m controla.cli sweep configs/sweep_balance.yaml --dry-run
+python -m controla.cli models --check
 ```
 
 ```bash
-python -m controla.cli sweep configs/sweep_balance.yaml
+python -m controla.cli play --seed 1 --snapshots --policies dots-studio/dots-3-note-preview:free,cooperator,conqueror,turtle --out runs/game.json
 ```
 
-Le `--dry-run` annonce le nombre de variantes et de parties avant de rien jouer. Un
-plan qui balaie un axe autour de sa valeur courante ne la rejoue pas : le
-dédoublonnage porte sur la configuration **résolue**, pas sur le dict d'overrides.
+Other commands: `describe` (generated rulebook), `tournament`, `sweep`
+(calibration), `replay`, `bench` (free-model discovery and probing).
 
-## Boucle de jeu
+## Tech
 
-```
-reset(seed)                        → monde symétrique, traits neutres
-pour chaque tour (15 par défaut) :
-    pour chaque dieu, à tour de rôle :
-        obs = observe(dieu)        → publique + information_state privé + masque
-        step(action)               → bufferisé en secret, aucune fuite
-        ... jusqu'à end_turn
-    ── barrière de ronde ──
-    les actions de la ronde s'appliquent ensemble
-    PASSE DE DÉVELOPPEMENT         → 14 étapes, ordre figé
-fin : score pondéré → classement complet des 4 → OpenSkill
-```
+Python 3.12 · PettingZoo / gymnasium · OpenSkill · OpenAI-compatible SDK ·
+FastAPI · vanilla HTML/JS · pytest
 
-Le « bundle » d'actions est la **séquence de coups entre deux `end_turn`**. Rien n'est
-appliqué avant la barrière : un dieu qui joue en dernier ne voit pas les coups des
-autres, donc la résolution est réellement simultanée.
+## License
 
-## Architecture
-
-```
-controla/
-├── config/           constantes [TUNE] en YAML, immuables au chargement
-├── registry/         descripteurs déclaratifs + catalogue (la couche moddable)
-├── world/            grille, BFS, génération symétrique par rotation
-├── state/            factions, file d'effets datés, modificateurs
-├── rng.py            aléa keyé (seed, tour, purpose, faction) + journal auditable
-├── dynamics/         la passe : économie, émergence, militaire, dérive, score
-├── actions/          index plat + masque (légalité) · exécution par descripteur
-├── env/              ControlaEnv (AEC), observation avec brouillard, reward
-├── policies/         interface · archétypes scriptés · policies LLM
-├── arena/            play_match · tournoi · OpenSkill · métriques · sweep · JSONL
-├── replay/           rendu texte · instantanés de plateau pour la restitution
-├── ui/               serveur web local : bibliothèque, replay, campagnes, jeu
-├── cli.py            describe · play · tournament · sweep · replay · models · ui
-└── ../configs/       plans de calibration (§13)
-```
-
-### Moddable par construction
-
-Chaque élément — ressource, terrain, trait, bâtiment, palier, action — est un
-**descripteur déclaratif** que le moteur exécute et que le prompt auto-décrit. Les
-effets sont de la **donnée introspectable** (`EffectSpec(kind="trait_call",
-trait="warrior", amount=2.0)`), jamais des lambdas opaques : sinon on peut les
-*exécuter* mais pas les *auto-décrire*, et « moddable » devient un vœu.
-
-Ajouter un mod = ajouter un descripteur dans `registry/catalog.py` et ses constantes
-dans `config/default.yaml`. Il apparaît alors **automatiquement** dans le règlement,
-dans le prompt et dans le masque d'actions légales.
-
-Trois tests verrouillent cette discipline : tout descripteur doit se décrire, aucun
-nom d'action ni libellé ne peut vivre en dur hors du catalogue, et aucune constante
-numérique ne peut apparaître dans le catalogue.
-
-### Aléa keyé — l'équité du benchmark
-
-Les flux d'aléa sont dérivés de `(seed, tour, purpose, faction)` via `blake2b`,
-**jamais** de l'ordre d'appel et **jamais** de `hash()` (dont le hachage des `str` est
-salé par processus, ce qui produirait un non-déterminisme silencieux entre deux
-exécutions).
-
-Sans cela, un modèle qui joue plus d'actions décalerait les récoltes de ses voisins,
-et le classement mesurerait la chance. Un test le prouve : ajouter trois coups à un
-dieu ne change **rien** pour les autres.
-
-## Tests
-
-```bash
-pytest
-```
-
-330 tests, ~80 s. Le filet est conçu pour rester vert pendant l'équilibrage : les
-invariants sont indépendants des constantes, donc un sweep qui les casse a cassé le
-moteur et non l'équilibre.
-
-| Fichier | Ce qu'il garantit |
-|---|---|
-| `test_env_api.py` | conformité PettingZoo (`api_test`, `seed_test`), masque, bufferisation, coups invalides |
-| `test_invariants.py` | stocks ≥ 0, traits bornés, guerre symétrique, terminaison, **conservation des ressources** |
-| `test_determinism.py` | même seed ⇒ même trajectoire d'aléa · l'activité d'un dieu ne décale pas les autres |
-| `test_dynamics.py` | Force saturante, Tullock, attrition, envies, dérive, économie |
-| `test_registry.py` | auto-description, ordre de la passe épinglé, zéro duplication |
-| `test_world.py` | symétrie de rotation **exacte** du monde, distances BFS |
-| `test_llm_policy.py` | prompt dérivé du catalogue, validation, relances, métriques |
-| `test_diplomacy.py` | formation des engagements, vérification sur l'intention, réputation |
-| `test_arena.py` | JSONL relisible, ordinal `μ − 3σ`, rotation des sièges, campagne reproductible |
-| `test_archetypes.py` | le panel joue ce qu'il déclare : effets signés, zéro nom d'action en dur |
-| `test_sweep.py` | plan sans doublon, constante inconnue refusée, critères §13 chiffrés |
-| `test_snapshot.py` | l'instantané de replay **est** l'état joué, case par case · glyphes distincts |
-| `test_ui.py` | confinement des chemins servis, session jouable rejouable, audit de modèles qui mord |
-| `test_llm_backend.py` | tokens comptés même sur réponse inexploitable, réglage `null` non envoyé |
-| `test_llm_memory.py` | sans mémoire rien n'est rejoué · avec, chaque historique est un préfixe exact du suivant (cache) · rien ne traverse deux parties |
-
-## État d'avancement
-
-- [x] **T0** — squelette et registre déclaratif
-- [x] **T1** — simulation déterministe, sans LLM
-- [x] **T2** — policy LLM (structured output, retries, taux d'action invalide)
-- [x] **T3** — négociation, engagements, réputation publique
-- [x] **T4** — tournoi, classement OpenSkill `μ − 3σ`, les cinq métriques §12
-- [x] **T5** — boucle de calibration : les trois critères §13 atteints
-- [~] **T6** — restitution : interface web (replay, campagnes, jeu) et audit de
-  fournisseur en place ; **reste le finding net** sur des modèles réels
-
-### Les trois critères de calibration (§13)
-
-Chacun se mesure sur le panel qui a été construit pour lui — les évaluer tous les
-trois sur les trois panels produit deux faux échecs.
-
-| Panel | Rôle | Résultat |
-|---|---|---|
-| `cooperator/conqueror/expansionist/turtle` | **équilibre** | domination **29 %**, plancher 21 %, étalement 0.99 |
-| `cooperator/betrayer/expansionist/turtle` | **parole** (§7) | `betrayer` isolé à 0 victoire — c'est un témoin |
-| `turtle/conqueror/random_legal/noop` | **levier divin** | le skill bat le hasard de **24.6** d'ordinal |
-
-Le panel plancher contient deux archétypes qui ne gagnent jamais par construction, et
-le panel de parole contient un témoin volontairement handicapé : la domination y est
-mécaniquement élevée et ne dit rien de l'équilibre.
-
-### Les cinq métriques du benchmark (§12)
-
-| Métrique | Ce qu'elle capte |
-|---|---|
-| **parole** | tient-il ses engagements ? — la métrique de théorie de l'esprit |
-| **exactitude** | ses coups sont-ils jouables ? (instruction-following) |
-| **cohérence** | poursuit-il une ligne, ou papillonne-t-il ? (`focus` + `engagement`) |
-| **alliances** | sait-il en nouer, et combien tiennent ? |
-| **survie** | reste-t-il en vie, et à quel rang finit-il ? |
-
-`focus` et `engagement` ne sont **pas** fusionnés en un seul nombre : un dieu muet
-qui paie une action de toute la partie obtient une concentration parfaite. Les
-composer demanderait une pondération arbitraire, ce que §13 proscrit.
-
-## Trois écarts assumés à la spec
-
-1. **La Force est saturante.** `Force = Pop × (base + Guerrier + β·métal + γ·camps)`
-   donnerait `Force ∝ cases²`, soit le scaling exponentiel que §12 interdit parce
-   qu'il *crée* la stratégie dominante. Les apports technologiques sont donc bornés :
-   `β·métal/(métal + m₀)`. Idem pour les points d'intervention, en `log(1 + pop)`
-   avec plafond.
-
-2. **La trahison se juge sur l'intention engagée**, pas sur l'issue. §6 interdit au
-   dieu d'ordonner une attaque, mais §7 définit l'alliance de guerre par le résultat :
-   un allié loyal qui rate son jet de seuil serait compté traître. Le moteur vérifie
-   donc l'**action payée** — lisible dans le registre des points d'intervention. Tenir
-   parole et perdre la bataille reste tenir parole.
-
-3. **La grille fait 11 cases de côté**, sous la fourchette `[12, 16]` de §2. Mesuré :
-   à 12 le premier contact tombe au tour 11.5, à 14 il n'a jamais lieu. Or §2 exige
-   des contacts précoces pour que guerres et négociations aient lieu en 15 tours.
-   L'intention prime sur la fourchette annoncée.
+[MIT](LICENSE)

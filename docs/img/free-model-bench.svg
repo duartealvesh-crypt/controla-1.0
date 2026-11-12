@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 430" width="760" height="430" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<style>
+.t{fill:#0b0b0b}.s{fill:#52514e}.m{fill:#8a8984}.g{stroke:#e4e3df}.bar{fill:#2a78d6}.pick{font-weight:600}
+@media (prefers-color-scheme: dark){.t{fill:#f0efec}.s{fill:#c3c2b7}.m{fill:#8f8e88}.g{stroke:#34342f}.bar{fill:#3987e5}}
+</style>
+<text x="16" y="26" class="t" font-size="16" font-weight="600">Free OpenRouter models, real game prompts</text>
+<text x="16" y="47" class="s" font-size="12.5">Valid, legal plans out of 6 probes (first try, no retry) · median latency · 2026-10-25</text>
+<line x1="300.0" y1="70" x2="300.0" y2="386" class="g" stroke-width="1"/>
+<text x="300.0" y="404" class="m" font-size="11" text-anchor="middle">0</text>
+<line x1="390.0" y1="70" x2="390.0" y2="386" class="g" stroke-width="1"/>
+<text x="390.0" y="404" class="m" font-size="11" text-anchor="middle">2</text>
+<line x1="480.0" y1="70" x2="480.0" y2="386" class="g" stroke-width="1"/>
+<text x="480.0" y="404" class="m" font-size="11" text-anchor="middle">4</text>
+<line x1="570.0" y1="70" x2="570.0" y2="386" class="g" stroke-width="1"/>
+<text x="570.0" y="404" class="m" font-size="11" text-anchor="middle">6</text>
+<text x="288" y="96.0" class="t pick" font-size="12.5" text-anchor="end">dots-studio/dots-3-note-preview</text>
+<path class="bar" d="M300,85.0 H566.0 Q570.0,85.0 570.0,89.0 V95.0 Q570.0,99.0 566.0,99.0 H300 Z"><title>dots-studio/dots-3-note-preview: 6/6 valid plans</title></path>
+<text x="584" y="96.0" class="s pick" font-size="12">6/6 · 26 s median</text>
+<text x="288" y="124.0" class="t" font-size="12.5" text-anchor="end">nvidia/nemotron-3.5-lightning</text>
+<path class="bar" d="M300,113.0 H566.0 Q570.0,113.0 570.0,117.0 V123.0 Q570.0,127.0 566.0,127.0 H300 Z"><title>nvidia/nemotron-3.5-lightning: 6/6 valid plans</title></path>
+<text x="584" y="124.0" class="s" font-size="12">6/6 · 60 s median</text>
+<text x="288" y="152.0" class="t" font-size="12.5" text-anchor="end">nvidia/nemotron-3.5-super-vl</text>
+<path class="bar" d="M300,141.0 H566.0 Q570.0,141.0 570.0,145.0 V151.0 Q570.0,155.0 566.0,155.0 H300 Z"><title>nvidia/nemotron-3.5-super-vl: 6/6 valid plans</title></path>
+<text x="584" y="152.0" class="s" font-size="12">6/6 · 69 s median</text>
+<text x="288" y="180.0" class="t" font-size="12.5" text-anchor="end">cohere/north-mini-code</text>
+<path class="bar" d="M300,169.0 H566.0 Q570.0,169.0 570.0,173.0 V179.0 Q570.0,183.0 566.0,183.0 H300 Z"><title>cohere/north-mini-code: 6/6 valid plans</title></path>
+<text x="584" y="180.0" class="s" font-size="12">6/6 · 111 s median</text>
+<text x="288" y="208.0" class="t" font-size="12.5" text-anchor="end">nvidia/nemotron-3-ultra-550b-a55b</text>
+<path class="bar" d="M300,197.0 H521.0 Q525.0,197.0 525.0,201.0 V207.0 Q525.0,211.0 521.0,211.0 H300 Z"><title>nvidia/nemotron-3-ultra-550b-a55b: 5/6 valid plans</title></path>
+<text x="584" y="208.0" class="s" font-size="12">5/6 · 32 s median</text>
+<text x="288" y="236.0" class="t" font-size="12.5" text-anchor="end">poolside/laguna-s-2.1</text>
+<path class="bar" d="M300,225.0 H431.0 Q435.0,225.0 435.0,229.0 V235.0 Q435.0,239.0 431.0,239.0 H300 Z"><title>poolside/laguna-s-2.1: 3/6 valid plans</title></path>
+<text x="584" y="236.0" class="s" font-size="12">3/6 · 129 s median · truncated</text>
+<text x="288" y="264.0" class="t" font-size="12.5" text-anchor="end">poolside/laguna-xs-2.1</text>
+<path class="bar" d="M300,253.0 H386.0 Q390.0,253.0 390.0,257.0 V263.0 Q390.0,267.0 386.0,267.0 H300 Z"><title>poolside/laguna-xs-2.1: 2/6 valid plans</title></path>
+<text x="584" y="264.0" class="s" font-size="12">2/6 · 13 s median · mostly 429</text>
+<text x="288" y="292.0" class="t" font-size="12.5" text-anchor="end">liquid/lfm-2.5-2.6b</text>
+<path class="bar" d="M300,281.0 H341.0 Q345.0,281.0 345.0,285.0 V291.0 Q345.0,295.0 341.0,295.0 H300 Z"><title>liquid/lfm-2.5-2.6b: 1/6 valid plans</title></path>
+<text x="584" y="292.0" class="s" font-size="12">1/6 · 18 s median · mostly 429</text>
+<text x="288" y="320.0" class="t" font-size="12.5" text-anchor="end">google/gemma-4-26b-a4b-it</text>
+<text x="584" y="320.0" class="s" font-size="12">rate-limited upstream (429)</text>
+<text x="288" y="348.0" class="t" font-size="12.5" text-anchor="end">google/gemma-4-31b-it</text>
+<text x="584" y="348.0" class="s" font-size="12">rate-limited upstream (429)</text>
+<text x="288" y="376.0" class="t" font-size="12.5" text-anchor="end">xingchen-agi/xing4.0-29b-a4b</text>
+<text x="584" y="376.0" class="s" font-size="12">rate-limited upstream (429)</text>
+</svg>
