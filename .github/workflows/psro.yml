@@ -1,0 +1,72 @@
+# Laboratoire d'équilibrage : exécutions PSRO sur les machines de GitHub.
+#
+# Lancé à la main : onglet Actions → psro → Run workflow (ou
+# `gh workflow run psro.yml -f seeds='[0, 1, 2]'`). Une exécution par job, toutes
+# en parallèle ; chaque job a 4 vCPU et 6 h au plus (gratuit sur un dépôt public).
+# Les résultats (state.json + journal) sont des artefacts du run :
+#   gh run download <id>
+name: psro
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: 'Variantes (JSON) : "libre" = diplomatie libre, "gelee" = gelée'
+        default: '["libre", "gelee"]'
+      seeds:
+        description: "Graines PSRO (JSON) : une exécution par variante et par graine"
+        default: "[0, 1]"
+      iterations:
+        description: "Itérations PSRO au plus"
+        default: "8"
+      extra:
+        description: "Options en plus pour lab.psro (ex. --generations 8 --refine-target 48)"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  psro:
+    name: psro ${{ matrix.variant }} graine ${{ matrix.seed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.variants) }}
+        seed: ${{ fromJSON(inputs.seeds) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: PSRO
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+          VARIANT: ${{ matrix.variant }}
+          SEED: ${{ matrix.seed }}
+          ITERATIONS: ${{ inputs.iterations }}
+          EXTRA: ${{ inputs.extra }}
+        run: |
+          flag=""
+          if [ "$VARIANT" = "gelee" ]; then flag="--frozen-diplomacy"; fi
+          mkdir -p runs/lab
+          # Arrêt propre avant la limite du job : state.json est écrit à chaque
+          # itération, l'artefact garde donc le travail déjà fait.
+          timeout 330m python -m lab.psro --name "$VARIANT-s$SEED" --seed "$SEED" \
+            --iterations "$ITERATIONS" --workers "$(nproc)" $flag $EXTRA \
+            | tee "runs/lab/psro-$VARIANT-s$SEED.log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: psro-${{ matrix.variant }}-s${{ matrix.seed }}
+          path: runs/lab/
+          if-no-files-found: warn

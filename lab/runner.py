@@ -3,6 +3,10 @@
 Un `Runner` garde un seul pool de processus pour toute une exécution : sous
 Windows, lancer un processus coûte environ une seconde, ce qu'on ne veut pas payer
 à chaque génération de CMA-ES.
+
+Les processus de calcul tournent en **priorité basse** : ils prennent tout le CPU
+libre, mais le cèdent dès que l'utilisateur se sert de sa machine (mesuré : en
+priorité normale, 11 processus rendaient le PC inutilisable pendant 2 h).
 """
 
 from __future__ import annotations
@@ -24,21 +28,41 @@ def points_of(seats: list, seed: int, overrides: dict | None = None) -> list[int
     return points
 
 
+def lower_priority() -> None:
+    """Passe le processus courant en priorité « inférieure à la normale »."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            below_normal = 0x4000
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), below_normal)
+        else:
+            os.nice(10)
+    except (OSError, AttributeError):
+        pass  # simple politesse : ne jamais faire échouer un calcul pour elle
+
+
 def _job(job: tuple) -> list[int]:
     seats, seed, overrides = job
     return points_of(seats, seed, overrides)
 
 
 class Runner:
-    def __init__(self, workers: int | None = None, overrides: dict | None = None):
+    def __init__(self, workers: int | None = None, overrides: dict | None = None,
+                 low_priority: bool = True):
         self.workers = workers or max(1, (os.cpu_count() or 2) - 1)
         self.overrides = overrides
+        self.low_priority = low_priority
         self._pool: ProcessPoolExecutor | None = None
         self.games = 0
 
     def __enter__(self) -> "Runner":
         if self.workers > 1:
-            self._pool = ProcessPoolExecutor(max_workers=self.workers)
+            self._pool = ProcessPoolExecutor(
+                max_workers=self.workers,
+                initializer=lower_priority if self.low_priority else None,
+            )
         return self
 
     def __exit__(self, *exc) -> None:

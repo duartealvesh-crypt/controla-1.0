@@ -63,3 +63,29 @@ def test_table_survives_a_json_round_trip():
     copy = PayoffTable.from_json(table.to_json())
     assert copy.payoff((0, 0, 1, 1), 1) == table.payoff((0, 0, 1, 1), 1)
     assert copy.missing(2) == []
+
+
+def test_trio_probability_sums_to_one():
+    from itertools import combinations_with_replacement
+
+    from lab.metagame import trio_probability
+    x = np.array([0.5, 0.3, 0.2])
+    total = sum(trio_probability(t, x) for t in combinations_with_replacement(range(3), 3))
+    assert total == pytest.approx(1.0)
+
+
+def test_relevant_cells_follow_the_mixture():
+    table = PayoffTable()
+    # Mélange pur sur 0 : seul le trio (0, 0, 0) compte, pour chaque stratégie i.
+    cells = table.relevant(np.array([1.0, 0.0, 0.0]), p_min=0.01)
+    assert sorted(cells) == [((0, 0, 0, 0), 0), ((0, 0, 0, 1), 1), ((0, 0, 0, 2), 2)]
+    # Mélange 50/50 sur 2 stratégies : les 4 trios ont p ≥ 1/8.
+    assert len(table.relevant(np.array([0.5, 0.5]), p_min=0.1)) == 4 * 2
+
+
+def test_count_reads_seats_played():
+    table = PayoffTable()
+    table.record([0, 0, 1, 2], [3, 2, 1, 0])
+    assert table.count((2, 1, 0, 0), 0) == 2
+    assert table.count((0, 0, 1, 2), 1) == 1
+    assert table.count((0, 0, 0, 0), 0) == 0

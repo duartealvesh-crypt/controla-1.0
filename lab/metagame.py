@@ -5,6 +5,11 @@ une case est un *profil* — le multi-ensemble des 4 stratégies présentes — 
 contient le gain moyen (points de rang) de chaque stratégie présente.
 Nombre de profils pour K stratégies : C(K + 3, 4).
 
+Une case est une MOYENNE de parties, donc bruitée : ±0,3 point avec 12 parties,
+plus que les écarts recherchés (mesuré : une meilleure réponse à +0,26 y
+paraissait à −0,05, et l'équilibre ne bougeait plus). D'où `relevant` : on ne
+précise que les cases qui pèsent dans le jugement de l'équilibre.
+
 **Gain contre un mélange.** Les 3 adversaires sont tirés indépendamment selon x :
 
     f_i(x) = Σ_trios P(trio | x) · gain de i dans le profil {i} ∪ trio
@@ -41,6 +46,13 @@ def seatings(profile: tuple[int, ...]) -> list[list[int]]:
     return [order[r:] + order[:r] for r in range(SEATS)]
 
 
+def trio_probability(trio, x) -> float:
+    """P(trio | x) : 3 adversaires tirés indépendamment selon x, ordre indifférent."""
+    counts = np.bincount(np.asarray(trio, dtype=int), minlength=len(x))
+    coef = factorial(SEATS - 1) / np.prod([factorial(int(c)) for c in counts])
+    return float(coef * np.prod([x[j] ** c for j, c in enumerate(counts) if c]))
+
+
 def _clean(x) -> np.ndarray:
     x = np.where(x < 1e-6, 0.0, x)
     return x / x.sum()
@@ -68,6 +80,11 @@ class PayoffTable:
     def payoff(self, profile, strategy: int) -> float:
         total, count = self._cells[tuple(sorted(profile))][strategy]
         return total / count
+
+    def count(self, profile, strategy: int) -> int:
+        """Nombre de sièges joués par `strategy` dans ce profil."""
+        cell = self._cells.get(tuple(sorted(profile)))
+        return 0 if cell is None or strategy not in cell else cell[strategy][1]
 
     # ── analyse ─────────────────────────────────────────────────────────────
 
@@ -115,6 +132,22 @@ class PayoffTable:
         # trajectoire s'en approche — on garde celui des deux qui regrette le moins.
         candidates = [_clean(x), _clean(average / max(1, averaged))]
         return min(candidates, key=self.regret)
+
+    def relevant(self, x, p_min: float) -> list[tuple[tuple[int, ...], int]]:
+        """Les cases (profil, stratégie) qui comptent pour juger le mélange x.
+
+        f_i(x) est une moyenne sur les trios d'adversaires, pondérée par leur
+        probabilité sous x. Une case dont le trio est improbable ne pèse presque
+        rien : inutile d'y dépenser des parties. Celles dont le trio a une
+        probabilité ≥ `p_min` décident de l'équilibre — pour TOUTES les
+        stratégies i, puisque le regret compare chacune à x.
+        """
+        k = len(x)
+        out = []
+        for trio in combinations_with_replacement(range(k), SEATS - 1):
+            if trio_probability(trio, x) >= p_min:
+                out.extend((tuple(sorted((i, *trio))), i) for i in range(k))
+        return out
 
     def regret(self, x) -> float:
         f = self.fitness(x)
