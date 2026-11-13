@@ -18,5 +18,8 @@ matplotlib
 fastapi
 uvicorn[standard]
 
+# Laboratoire d'équilibrage (`lab/`, hors du jeu)
+cma>=4.0
+
 # Tests
 pytest

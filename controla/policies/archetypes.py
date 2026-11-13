@@ -44,6 +44,21 @@ class Archetype:
     )
     honour_rate: float = 1.0
     temperature: float = 0.35
+    # Proposer et accepter, séparément. `None` = `commitment_rate` pour les deux,
+    # ce qui laisse le panel historique inchangé. Les séparer permet une conduite
+    # « ne propose jamais, mais accepte volontiers » : sans elle, un dieu qui ne
+    # s'engage pas prive aussi les autres de partenaire, et la diplomatie paraît
+    # inutile par simple absence de réponse (chasse au cerf).
+    propose_rate: float | None = None
+    accept_rate: float | None = None
+
+    @property
+    def proposing(self) -> float:
+        return self.commitment_rate if self.propose_rate is None else self.propose_rate
+
+    @property
+    def accepting(self) -> float:
+        return self.commitment_rate if self.accept_rate is None else self.accept_rate
 
 
 # La **malédiction** hérite de la position déclarée sur l'**embargo** : les deux
@@ -199,7 +214,7 @@ class ScriptedPolicy(Policy):
         return (
             score
             * self._target_bias(entry, view)
-            * self._commitment_bias(entry)
+            * self._commitment_bias(entry, view)
             * self._reciprocity_bias(entry, view)
             * self._promise_bias(entry, view)
             * self._loyalty_bias(entry, view)
@@ -214,21 +229,27 @@ class ScriptedPolicy(Policy):
         5 engagements sur 20 parties. Répondre est donc une conduite de base du
         panel, pondérée par la propension à s'engager.
         """
+        if not self._answers_offer(entry, view):
+            return 1.0
+        return 1.0 + 8.0 * self.archetype.accepting
+
+    def _answers_offer(self, entry: dict, view: dict) -> bool:
+        """Ce coup répond-il à une proposition reçue ?
+
+        Répondre, c'est promettre EXACTEMENT la même chose : même type, et même
+        cible pour une alliance de guerre. Sinon l'engagement ne se forme pas.
+        """
         pledge = self._pledge(entry["target"])
         if pledge is None or pledge == "none":
-            return 1.0
+            return False
         partner = self._partner(entry["target"])
-        # Répondre, c'est promettre EXACTEMENT la même chose : même type, et
-        # même cible pour une alliance de guerre. Sinon l'engagement ne se forme pas.
         offered = {
             (message["pledge"], message.get("victim", -1))
             for message in view.get("inbox", [])
             if message["from"] == partner
         }
         victim = self._victim(entry["target"])
-        if (pledge, -1 if victim is None else victim) not in offered:
-            return 1.0
-        return 1.0 + 8.0 * self.archetype.commitment_rate
+        return (pledge, -1 if victim is None else victim) in offered
 
     def _promise_bias(self, entry: dict, view: dict) -> float:
         """Diriger son agression vers la cible PROMISE.
@@ -306,7 +327,7 @@ class ScriptedPolicy(Policy):
             return int(target[2])
         return None
 
-    def _commitment_bias(self, entry: dict) -> float:
+    def _commitment_bias(self, entry: dict, view: dict) -> float:
         """Biaise le choix entre les variantes d'une négociation.
 
         L'engagement étant replié dans l'index, « promettre ou non » est un choix
@@ -317,9 +338,13 @@ class ScriptedPolicy(Policy):
         pledge = self._pledge(entry["target"])
         if pledge is None:
             return 1.0
-        rate = self.archetype.commitment_rate
         if pledge == "none":
-            return max(0.05, 1.0 - rate)
+            return max(0.05, 1.0 - self.archetype.proposing)
+        # Une réponse relève de l'acceptation, une offre spontanée de la proposition.
+        rate = (
+            self.archetype.accepting if self._answers_offer(entry, view)
+            else self.archetype.proposing
+        )
         appetite = self.archetype.commitment_kinds.get(pledge, 1.0)
         return max(0.01, rate * appetite)
 

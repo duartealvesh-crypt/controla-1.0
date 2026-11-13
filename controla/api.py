@@ -27,6 +27,7 @@ from controla.policies.archetypes import (
 )
 from controla.policies.factory import build_policies
 from controla.registry.catalog import build_catalog
+from controla.registry.descriptors import COMMITMENT_KINDS, NO_COMMITMENT
 
 SEATS_PER_GAME = 4
 
@@ -45,6 +46,37 @@ def archetype_params(name: str) -> dict:
     if name not in ARCHETYPES:
         raise KeyError(f"archétype inconnu : {name!r} — disponibles : {sorted(ARCHETYPES)}")
     return dataclasses.asdict(ARCHETYPES[name])
+
+
+TARGET_RULES = ("none", "retaliate", "leader", "trusting")
+
+
+def archetype_space(overrides: dict | None = None) -> dict:
+    """L'espace des paramètres d'un archétype : les clés que chaque dict de poids
+    peut porter, dérivées du catalogue (un mod qui ajoute un effet l'y fait
+    apparaître d'office).
+
+    * `kinds` : familles d'actions (`kind_weights`, poids > 0) ;
+    * `effects` : effets signés (`effect_weights`, multiplicateur `1 + w`) —
+      `embargo` et `curse` sont les versants négatifs du commerce et des miracles ;
+    * `traits` : traits du peuple (`trait_weights`, signés) ;
+    * `commitment_kinds` : types d'engagement (`commitment_kinds`, appétence ≥ 0) ;
+    * `target_rules` : valeurs admises de `target_rule` ;
+    * `rates` : taux dans [0, 1].
+    """
+    catalog = build_catalog(load_config(overrides=overrides))
+    effects = {
+        ScriptedPolicy._effect_key(effect)
+        for spec in catalog.actions for effect in spec.effects
+    }
+    return {
+        "kinds": sorted({spec.kind.value for spec in catalog.actions}),
+        "effects": sorted(effects),
+        "traits": list(catalog.trait_keys),
+        "commitment_kinds": [kind for kind in COMMITMENT_KINDS if kind != NO_COMMITMENT],
+        "target_rules": list(TARGET_RULES),
+        "rates": ["propose_rate", "accept_rate", "honour_rate"],
+    }
 
 
 def play_game(
