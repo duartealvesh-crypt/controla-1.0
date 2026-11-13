@@ -4,5 +4,9 @@ __pycache__/
 runs/
 .env
 
+# Sources des sprites (bruts PixelLab, aperçus, palette) : seuls ceux de
+# controla/ui/static/sprites/ sont utilisés par l'UI.
+art/
+
 .vscode/
 .venv/
