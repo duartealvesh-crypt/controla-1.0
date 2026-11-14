@@ -69,6 +69,16 @@ class Runner:
         if self._pool is not None:
             self._pool.shutdown()
 
+    def map(self, fn, jobs: list) -> list:
+        """Applique `fn` (fonction de module, donc transmissible aux processus) à
+        chaque élément — pour les analyses qui veulent plus que les points."""
+        jobs = list(jobs)
+        self.games += len(jobs)
+        if self._pool is None:
+            return [fn(job) for job in jobs]
+        chunk = max(1, len(jobs) // (self.workers * 4))
+        return list(self._pool.map(fn, jobs, chunksize=chunk))
+
     def play(self, games: list[tuple[list, int]]) -> list[list[int]]:
         """`games` : liste de (sièges, seed). Rend les points de chaque partie."""
         jobs = [(seats, seed, self.overrides) for seats, seed in games]

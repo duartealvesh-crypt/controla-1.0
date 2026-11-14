@@ -223,6 +223,14 @@ def trade(cfg, state: GameState, rng) -> list[dict]:
             current = first.trade_relation.get(second.id, 0.0)
             set_trade_relation(state, first.id, second.id, current * decay)
 
+    # Une alliance économique GARANTIT l'échange : son plancher doit tenir après
+    # le déclin. Appliqué seulement en fin de résolution, il était aussitôt
+    # entamé ici (0,50 × 0,9 = 0,45 < seuil) — mesuré : aucun échange pendant
+    # toute la durée de l'alliance, hors tour de signature.
+    from controla.diplomacy.commitment import enforce_economic_transfers
+
+    enforce_economic_transfers(cfg, state)
+
     for index, first in enumerate(living):
         for second in living[index + 1:]:
             relation = first.trade_relation.get(second.id, 0.0)

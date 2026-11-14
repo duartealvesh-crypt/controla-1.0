@@ -5,10 +5,22 @@
       1. EGTA          jouer les profils manquants → table des gains
       2. méta-solveur  réplicateur → mélange d'équilibre σ ; préciser les cases
                        qui pèsent sous σ, recalculer σ (jusqu'à stabilité)
-      3. oracle        CMA-ES : meilleure réponse à σ (adversaires tirés selon σ)
-      4. test          gain de la meilleure réponse contre σ (référence : 1,5)
-                       net → on l'ajoute (et ses parties de test vont dans la
-                       table) ; sinon STOP
+      3. oracles       CMA-ES, depuis les `starts` stratégies les mieux placées :
+                       - solo   : meilleure réponse à σ (3 adversaires selon σ)
+                       - équipe : meilleure stratégie jouée par DEUX sièges
+                                  contre 2 adversaires selon σ
+      4. test          solo : gain contre σ (référence 1,5) ;
+                       équipe : gain sur la meilleure équipe déjà connue.
+                       Net → on l'ajoute (ses parties de test vont dans la
+                       table) ; aucune des deux → STOP
+
+**Pourquoi un oracle équipe.** Un oracle solo ne teste que des déviations
+unilatérales. Mesuré contre σ = 100 % turtle : un conquérant seul fait 0,8 à
+1,25 point (le lièvre), mais deux conquérants qui ne se frappent pas en font 2,2
+chacun (le cerf). La coalition est invisible à l'oracle solo, puisque dans un
+monde de turtles personne n'accepte son alliance. L'oracle équipe la cherche ;
+le méta-solveur décide ensuite si elle tient dans le mélange (α-Rank, avec une
+population de 4, voit justement un mutant qui gagne à deux).
 
 **Le bruit de la table.** Chaque case est une moyenne de parties. La première
 version jouait tous les profils sur les 3 mêmes cartes : ±0,3 point par case, et
@@ -21,12 +33,13 @@ chaque case dont le trio d'adversaires a une probabilité ≥ `refine_pmin` sous
 Deux exécutions à comparer : diplomatie libre, et diplomatie gelée
 (`--frozen-diplomacy`, propose = accepte = 0 pour tous). Attention : une
 diplomatie qui ne change pas l'équilibre ne prouve PAS qu'elle ne vaut rien
-(chasse au cerf) — c'est le rôle des tests de déviation à deux, à venir.
+(chasse au cerf) — d'où l'oracle équipe, et `lab.coalitions`.
 
     python -m lab.psro --name libre
     python -m lab.psro --name gelee --frozen-diplomacy
     python -m lab.psro --name essai --smoke
     python -m lab.psro --name libre --workers 6     # garder des cœurs libres
+    python -m lab.psro --name solo --no-team         # oracle solo seulement
 """
 
 from __future__ import annotations
@@ -40,7 +53,7 @@ from pathlib import Path
 import numpy as np
 
 from controla import api
-from lab.metagame import PayoffTable, seatings
+from lab.metagame import SEATS, PayoffTable, seatings
 from lab.runner import Runner
 from lab.strategy import CLIP, Space, describe
 
@@ -57,8 +70,11 @@ class Settings:
         self.refine_pmin = 0.03     # probabilité minimale du trio pour peser
         self.refine_rounds = 3      # allers-retours σ → précision → σ
         self.popsize = 0            # 0 → défaut de CMA-ES (4 + 3 ln d)
-        self.generations = 12
-        self.scenarios = 16         # parties par candidat et par génération
+        self.generations = 15
+        self.scenarios = 24         # parties par candidat et par génération
+        self.starts = 2             # points de départ de l'oracle (les mieux placés)
+        self.screen_games = 64      # présélection entre les départs
+        self.team = True            # oracle « équipe » : 2 copies contre σ
         self.eval_games = 128
         self.threshold = 0.10       # gain minimal (points de rang) pour ajouter
         self.sigma0 = 0.8
@@ -96,7 +112,7 @@ def fill_table(runner: Runner, table: PayoffTable, population: list[dict], s: Se
 def refine(runner, table: PayoffTable, population, sigma, s: Settings, rng) -> int:
     """Complète les cases qui pèsent sous σ jusqu'à `refine_target` sièges."""
     needed: dict[tuple, int] = {}
-    for profile, i in table.relevant(sigma, s.refine_pmin):
+    for profile, i in table.relevant(sigma, s.refine_pmin, team=s.team):
         missing = s.refine_target - table.count(profile, i)
         if missing > 0:
             per_game = profile.count(i)       # sièges de i gagnés par partie
@@ -122,85 +138,116 @@ def solve(runner, table: PayoffTable, population, s: Settings, rng):
     return sigma, played
 
 
-def scenarios(rng, sigma, count: int) -> list[tuple]:
-    """(seed, trio d'adversaires tirés selon σ, position du joueur évalué)."""
+def scenarios(rng, sigma, count: int, copies: int = 1) -> list[tuple]:
+    """(seed, adversaires tirés selon σ, positions du ou des sièges évalués).
+
+    `copies = 2` : une ÉQUIPE de deux copies du candidat face à deux adversaires."""
     k = len(sigma)
     return [
-        (_seed(rng), [int(i) for i in rng.choice(k, size=3, p=sigma)], int(rng.integers(4)))
+        (_seed(rng),
+         [int(i) for i in rng.choice(k, size=SEATS - copies, p=sigma)],
+         sorted(int(p) for p in rng.choice(SEATS, size=copies, replace=False)))
         for _ in range(count)
     ]
 
 
-def _seats(candidate: dict, trio: list[int], position: int, population: list[dict]) -> list:
-    seats = [population[i]["params"] for i in trio]
-    seats.insert(position, candidate)
-    return seats
+def _layout(candidate, others: list, positions: list[int]) -> list:
+    """Le candidat aux `positions`, les autres dans l'ordre sur les sièges restants."""
+    rest = iter(others)
+    return [candidate if seat in positions else next(rest) for seat in range(SEATS)]
 
 
 def play_cases(runner, candidates: list[dict], cases: list[tuple], population) -> list:
-    """Chaque candidat sur les MÊMES cas (même seeds, mêmes adversaires, même
-    position) : seule la stratégie diffère. Rend les points des 4 sièges."""
+    """Chaque candidat sur les MÊMES cas (même seeds, mêmes adversaires, mêmes
+    positions) : seule la stratégie diffère. Rend les points des 4 sièges."""
     games = [
-        (_seats(candidate, trio, position, population), seed)
-        for candidate in candidates for seed, trio, position in cases
+        (_layout(candidate, [population[i]["params"] for i in others], positions), seed)
+        for candidate in candidates for seed, others, positions in cases
     ]
     return runner.play(games)
 
 
 def score_against(runner, candidates: list[dict], cases: list[tuple], population) -> np.ndarray:
-    """Points de rang de chaque candidat : tableau (candidats × cas)."""
+    """Points de rang moyens des sièges du candidat : tableau (candidats × cas)."""
     results = play_cases(runner, candidates, cases, population)
     points = np.array([
-        result[position]
-        for result, (_, _, position) in zip(results, cases * len(candidates))
+        np.mean([result[p] for p in positions])
+        for result, (_, _, positions) in zip(results, cases * len(candidates))
     ], dtype=float)
     return points.reshape(len(candidates), len(cases))
 
 
+# Les critères d'arrêt de CMA-ES supposent une fonction exacte. Ici chaque
+# évaluation est une moyenne de parties, en multiples de 1/n : plusieurs candidats
+# ont souvent le même score, et `tolflatfitness` (défaut 1) y voit un plateau —
+# mesuré : arrêt après 7 à 9 générations sur 12. Seul `maxiter` arrête donc.
+CMA_NOISY = {"tolflatfitness": 10**9, "tolfun": 0, "tolfunhist": 0, "tolx": 0,
+             "tolstagnation": 10**9}
+
+
 def best_response(runner, space: Space, population, sigma, start: dict, s: Settings,
-                  rng, label: str, log) -> dict:
+                  rng, label: str, log, copies: int = 1) -> dict:
     import cma
 
-    options = {
-        "bounds": [-CLIP, CLIP],
-        "maxiter": s.generations,
-        "seed": int(rng.integers(1, 2**31 - 1)),
-        "verbose": -9,
-    }
+    options = {"bounds": [-CLIP, CLIP], "maxiter": s.generations, "seed": _seed(rng),
+               "verbose": -9, **CMA_NOISY}
     options["popsize"] = s.popsize or 4 + int(3 * math.log(space.dim))
     es = cma.CMAEvolutionStrategy(space.encode(start), s.sigma0, options)
-    generation = 0
-    while not es.stop():
-        generation += 1
-        cases = scenarios(rng, sigma, s.scenarios)
+    for generation in range(1, s.generations + 1):
+        cases = scenarios(rng, sigma, s.scenarios, copies)
         xs = es.ask()
         candidates = [space.decode(x, label) for x in xs]
         means = score_against(runner, candidates, cases, population).mean(axis=1)
         es.tell(xs, [-m for m in means])
         log(f"    génération {generation:>2} · meilleur {means.max():.2f} · "
             f"moyenne {means.mean():.2f} · σ {es.sigma:.2f}")
+        if es.stop():
+            break
     return space.decode(es.result.xfavorite, label)
 
 
-def evaluate(runner, candidate: dict, population, sigma, s: Settings, rng):
-    """Gain contre σ sur des parties fraîches : (gain − 1,5, erreur type, parties).
+def evaluate(runner, candidate: dict, population, sigma, s: Settings, rng,
+             copies: int = 1, games: int | None = None):
+    """Points moyens par siège du candidat contre σ, sur des parties fraîches :
+    (moyenne, erreur type, parties).
 
     Les parties sont rendues pour être versées dans la table si le candidat
     entre dans la population : ce sont justement les cases qui pèsent sous σ."""
-    cases = scenarios(rng, sigma, s.eval_games)
+    cases = scenarios(rng, sigma, games or s.eval_games, copies)
     results = play_cases(runner, [candidate], cases, population)
-    points = np.array([r[pos] for r, (_, _, pos) in zip(results, cases)], dtype=float)
-    gain = float(points.mean() - NEUTRAL)
-    se = float(points.std(ddof=1) / math.sqrt(len(points)))
-    return gain, se, list(zip(cases, results))
+    points = np.array([np.mean([r[p] for p in pos]) for r, (_, _, pos) in zip(results, cases)],
+                      dtype=float)
+    return (float(points.mean()), float(points.std(ddof=1) / math.sqrt(len(points))),
+            list(zip(cases, results)))
 
 
 def record_cases(table: PayoffTable, index: int, games) -> None:
     """Verse les parties d'évaluation d'une stratégie devenue `index`."""
-    for (_, trio, position), points in games:
-        seating = list(trio)
-        seating.insert(position, index)
-        table.record(seating, points)
+    for (_, others, positions), points in games:
+        rest = iter(others)
+        table.record([index if seat in positions else next(rest) for seat in range(SEATS)],
+                     points)
+
+
+def oracle(runner, space: Space, population, sigma, reference, s: Settings, rng,
+           label: str, log, copies: int):
+    """Meilleure réponse cherchée depuis les `starts` stratégies les mieux placées
+    selon `reference` ; présélection sur `screen_games` parties, puis mesure
+    finale sur des parties FRAÎCHES — la présélection favorise les chanceux, on
+    ne réutilise donc pas ses chiffres."""
+    kind = "équipe de 2" if copies == 2 else "solo"
+    found = []
+    for i in np.argsort(-np.asarray(reference))[: s.starts]:
+        log(f"  oracle {kind} : CMA-ES depuis {population[i]['label']}")
+        found.append(best_response(runner, space, population, sigma, population[i]["params"],
+                                   s, rng, label, log, copies))
+    best = found[0]
+    if len(found) > 1:
+        screened = [evaluate(runner, c, population, sigma, s, rng, copies, s.screen_games)[0]
+                    for c in found]
+        best = found[int(np.argmax(screened))]
+    mean, se, games = evaluate(runner, best, population, sigma, s, rng, copies)
+    return best, mean, se, games
 
 
 # ── boucle ──────────────────────────────────────────────────────────────────
@@ -230,6 +277,9 @@ def run(name: str, space: Space, s: Settings, workers=None, log=print) -> dict:
         (out_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False, indent=1),
                                             encoding="utf-8")
 
+    def labels(values):
+        return {p["label"]: float(v) for p, v in zip(population, values)}
+
     with Runner(workers) as runner:
         for it in range(1, s.iterations + 1):
             t0 = time.perf_counter()
@@ -241,29 +291,50 @@ def run(name: str, space: Space, s: Settings, workers=None, log=print) -> dict:
                 f"EGTA {played} + {refined} parties de précision ──")
             log(_sigma_line(population, sigma, fitness))
             log(f"  regret dans la population : {regret:.3f}")
+            record = {"iteration": it, "strategies": len(population),
+                      "sigma": labels(sigma), "fitness": labels(fitness),
+                      "regret": float(regret)}
+            new = []
 
-            start = population[int(np.argmax(fitness))]["params"]
-            label = f"br{it}"
-            log(f"  oracle : CMA-ES depuis {population[int(np.argmax(fitness))]['label']}")
-            br = best_response(runner, space, population, sigma, start, s, rng, label, log)
-            gain, se, games = evaluate(runner, br, population, sigma, s, rng)
-            accepted = gain > max(s.threshold, 2 * se)
-            log(f"  meilleure réponse : gain {gain:+.3f} ± {se:.3f} contre σ "
-                f"→ {'AJOUTÉE' if accepted else 'rejetée : STOP'}")
+            br, mean, se, games = oracle(runner, space, population, sigma, fitness, s, rng,
+                                         f"br{it}", log, copies=1)
+            gain = float(mean - NEUTRAL)
+            accepted = bool(gain > max(s.threshold, 2 * se))
+            log(f"  meilleure réponse solo : gain {gain:+.3f} ± {se:.3f} contre σ "
+                f"→ {'AJOUTÉE' if accepted else 'rejetée'}")
             log(f"  {describe(br)}")
+            record.update(br_gain=gain, br_se=se, accepted=accepted, br=br)
+            if accepted:
+                new.append((f"br{it}", br, games, f"oracle solo {it}"))
 
-            iterations.append({
-                "iteration": it, "strategies": len(population),
-                "sigma": {p["label"]: float(v) for p, v in zip(population, sigma)},
-                "fitness": {p["label"]: float(v) for p, v in zip(population, fitness)},
-                "regret": regret, "br_gain": gain, "br_se": se, "accepted": accepted,
-                "br": br, "seconds": round(time.perf_counter() - t0, 1),
-            })
-            if not accepted:
+            if s.team:
+                team = table.team_fitness(sigma)
+                best_team = int(np.argmax(team))
+                log(f"  valeur d'équipe (2 copies contre σ) : "
+                    + ", ".join(f"{population[i]['label']} {team[i]:.2f}"
+                                for i in np.argsort(-team)[:4]))
+                eq, tmean, tse, tgames = oracle(runner, space, population, sigma, team, s, rng,
+                                                f"eq{it}", log, copies=2)
+                tgain = float(tmean - team[best_team])
+                taccepted = bool(tgain > max(s.threshold, 2 * tse))
+                log(f"  meilleure équipe : {tmean:.3f} ± {tse:.3f} par siège, soit "
+                    f"{tgain:+.3f} sur la meilleure équipe connue ({population[best_team]['label']}) "
+                    f"→ {'AJOUTÉE' if taccepted else 'rejetée'}")
+                log(f"  {describe(eq)}")
+                record.update(team_fitness=labels(team), team_mean=tmean, team_gain=tgain,
+                              team_se=tse, team_accepted=taccepted, team_br=eq)
+                if taccepted:
+                    new.append((f"eq{it}", eq, tgames, f"oracle équipe {it}"))
+
+            record["seconds"] = round(time.perf_counter() - t0, 1)
+            iterations.append(record)
+            if not new:
+                log("  aucune réponse ne bat σ : STOP")
                 save("converged", sigma)
                 break
-            population.append({"label": label, "params": br, "origin": f"oracle {it}"})
-            record_cases(table, len(population) - 1, games)
+            for label, params, games, origin in new:
+                population.append({"label": label, "params": params, "origin": origin})
+                record_cases(table, len(population) - 1, games)
             save("running", sigma)
         else:
             fill_table(runner, table, population, s, rng)
@@ -287,7 +358,7 @@ def _sigma_line(population, sigma, fitness) -> str:
 # ── ligne de commande ───────────────────────────────────────────────────────
 
 SMOKE = dict(iterations=2, base_games=4, refine_target=6, popsize=6, generations=2,
-             scenarios=4, eval_games=8,
+             scenarios=4, eval_games=8, starts=2, screen_games=4,
              panel=["cooperator", "conqueror", "turtle"])
 
 
@@ -305,6 +376,9 @@ def main(argv=None) -> int:
     parser.add_argument("--scenarios", type=int)
     parser.add_argument("--eval-games", type=int)
     parser.add_argument("--threshold", type=float)
+    parser.add_argument("--starts", type=int, help="points de départ de l'oracle")
+    parser.add_argument("--screen-games", type=int)
+    parser.add_argument("--no-team", action="store_true", help="sans oracle « équipe »")
     parser.add_argument("--seed", type=int)
     parser.add_argument("--workers", type=int,
                         help="processus de calcul (défaut : cœurs − 1, en priorité basse)")
@@ -313,7 +387,9 @@ def main(argv=None) -> int:
 
     values = {key: getattr(args, key) for key in (
         "iterations", "base_games", "refine_target", "refine_pmin", "popsize", "generations", "scenarios", "eval_games",
-        "threshold", "seed")}
+        "threshold", "seed", "starts", "screen_games")}
+    if args.no_team:
+        values["team"] = False
     if args.smoke:
         values = {**SMOKE, **{k: v for k, v in values.items() if v is not None}}
     settings = Settings(**values)

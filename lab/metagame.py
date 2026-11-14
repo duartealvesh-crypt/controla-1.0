@@ -47,9 +47,10 @@ def seatings(profile: tuple[int, ...]) -> list[list[int]]:
 
 
 def trio_probability(trio, x) -> float:
-    """P(trio | x) : 3 adversaires tirés indépendamment selon x, ordre indifférent."""
+    """P(groupe | x) : adversaires tirés indépendamment selon x, ordre indifférent
+    (un trio, ou un duo pour une équipe de deux)."""
     counts = np.bincount(np.asarray(trio, dtype=int), minlength=len(x))
-    coef = factorial(SEATS - 1) / np.prod([factorial(int(c)) for c in counts])
+    coef = factorial(len(trio)) / np.prod([factorial(int(c)) for c in counts])
     return float(coef * np.prod([x[j] ** c for j, c in enumerate(counts) if c]))
 
 
@@ -133,7 +134,7 @@ class PayoffTable:
         candidates = [_clean(x), _clean(average / max(1, averaged))]
         return min(candidates, key=self.regret)
 
-    def relevant(self, x, p_min: float) -> list[tuple[tuple[int, ...], int]]:
+    def relevant(self, x, p_min: float, team: bool = False) -> list[tuple[tuple[int, ...], int]]:
         """Les cases (profil, stratégie) qui comptent pour juger le mélange x.
 
         f_i(x) est une moyenne sur les trios d'adversaires, pondérée par leur
@@ -147,6 +148,31 @@ class PayoffTable:
         for trio in combinations_with_replacement(range(k), SEATS - 1):
             if trio_probability(trio, x) >= p_min:
                 out.extend((tuple(sorted((i, *trio))), i) for i in range(k))
+        if team:
+            # Valeur d'équipe : deux copies de i face à un duo tiré selon x.
+            for duo in combinations_with_replacement(range(k), SEATS - 2):
+                if trio_probability(duo, x) >= p_min:
+                    out.extend((tuple(sorted((i, i, *duo))), i) for i in range(k))
+        return sorted(set(out))
+
+    def team_fitness(self, x) -> np.ndarray:
+        """Gain moyen par siège d'une ÉQUIPE de deux copies de i, face à deux
+        adversaires tirés selon x.
+
+        C'est ce que la fitness ordinaire ne montre pas : une stratégie de
+        coalition perd seule (lièvre) mais gagne à deux (cerf). Sous un mélange x,
+        f_i compte bien la chance de croiser une copie de soi, mais elle vaut x_i,
+        quasi nulle pour une stratégie absente de x : la coalition reste invisible.
+        """
+        x = np.asarray(x, dtype=float)
+        k = len(x)
+        out = np.zeros(k)
+        for duo in combinations_with_replacement(range(k), SEATS - 2):
+            p = trio_probability(duo, x)
+            if p == 0.0:
+                continue
+            for i in range(k):
+                out[i] += p * self.payoff((i, i, *duo), i)
         return out
 
     def regret(self, x) -> float:

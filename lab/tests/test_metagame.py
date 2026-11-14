@@ -89,3 +89,24 @@ def test_count_reads_seats_played():
     assert table.count((2, 1, 0, 0), 0) == 2
     assert table.count((0, 0, 1, 2), 1) == 1
     assert table.count((0, 0, 0, 0), 0) == 0
+
+
+def test_team_fitness_sees_a_stag_hunt():
+    # Stratégie 1 = « cerf » : perd seule (0), gagne si une autre copie est là (3).
+    def payoff(i, others):
+        if i == 1:
+            return 3.0 if 1 in others else 0.0
+        return 1.5
+
+    table = _table(2, payoff)
+    x = np.array([1.0, 0.0])                       # tout le monde joue le lièvre
+    assert table.fitness(x)[1] == pytest.approx(0.0)     # seul : invisible
+    assert table.team_fitness(x)[1] == pytest.approx(3.0)  # à deux : il gagne
+    assert table.team_fitness(x)[0] == pytest.approx(1.5)
+
+
+def test_relevant_cells_include_team_cells_on_request():
+    table = PayoffTable()
+    cells = table.relevant(np.array([1.0, 0.0]), p_min=0.01, team=True)
+    assert ((0, 0, 1, 1), 1) in cells
+    assert ((0, 0, 1, 1), 1) not in table.relevant(np.array([1.0, 0.0]), p_min=0.01)

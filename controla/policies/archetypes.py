@@ -51,6 +51,15 @@ class Archetype:
     # inutile par simple absence de réponse (chasse au cerf).
     propose_rate: float | None = None
     accept_rate: float | None = None
+    # Pacte convenu AVANT la partie avec d'autres sièges (ids de faction) : on
+    # cherche à former l'engagement `pact` avec eux, et on ne les agresse pas.
+    # Pour une alliance de guerre, la victime est le leader visible hors pacte.
+    # `non_aggression` : ne rien sceller, seulement ne pas se frapper — la
+    # référence qui isole ce que l'engagement lui-même rapporte.
+    # Sert aux tests de déviation à deux : une paire peut-elle gagner ensemble
+    # là où chacun seul ne gagne rien ? Vide = aucun pacte, conduite inchangée.
+    partners: tuple[int, ...] = ()
+    pact: str = "econ_alliance"
 
     @property
     def proposing(self) -> float:
@@ -158,12 +167,14 @@ class ScriptedPolicy(Policy):
         self.name = self.archetype.name
         self.faction_id = 0
         self._rng = random.Random(0)
+        self._pact_offered: dict[int, int] = {}
 
     def reset(self, faction_id: int, seed: int) -> None:
         self.faction_id = faction_id
         # Flux propre à la policy : elle n'est pas dans l'environnement, donc son
         # aléa ne doit pas puiser dans celui du jeu.
         self._rng = random.Random(seed * 7919 + faction_id)
+        self._pact_offered = {}
 
     # ── évaluation d'un coup ────────────────────────────────────────────────
 
@@ -218,7 +229,74 @@ class ScriptedPolicy(Policy):
             * self._reciprocity_bias(entry, view)
             * self._promise_bias(entry, view)
             * self._loyalty_bias(entry, view)
+            * self._pact_bias(entry, view)
         )
+
+    def _is_pact_move(self, entry: dict, view: dict) -> bool:
+        """Ce coup scelle-t-il le pacte convenu (bon partenaire, bon type, bonne
+        victime) ?"""
+        partner = self._partner(entry["target"])
+        if partner not in self.archetype.partners or self.archetype.pact == "non_aggression":
+            return False
+        if self._pledge(entry["target"]) != self.archetype.pact:
+            return False
+        if self.archetype.pact != "war_alliance":
+            return True
+        outsiders = [r for r in view["rivals"]
+                     if r["id"] not in self.archetype.partners and r.get("alive", True)]
+        if not outsiders:
+            return False
+        leader = max(outsiders, key=lambda r: r["tiles"])["id"]
+        return self._victim(entry["target"]) == leader
+
+    def _pact_wanted(self, entry: dict, view: dict) -> bool:
+        """Faut-il (re)sceller le pacte avec ce partenaire, par ce coup ?
+
+        Non s'il est déjà en vigueur, ni si on l'a déjà proposé ce tour-ci —
+        mesuré : sans ces deux garde-fous, une paire envoyait 160 propositions
+        en 15 tours et y brûlait tout son budget divin.
+        """
+        if not self._is_pact_move(entry, view):
+            return False
+        partner = self._partner(entry["target"])
+        if self._pact_offered.get(partner) == view["turn"]:
+            return False
+        return not self._already_bound(entry, view)
+
+    def _already_bound(self, entry: dict, view: dict) -> bool:
+        """Ce coup promet-il un engagement DÉJÀ en vigueur avec ce partenaire ?
+
+        Le reproposer ne lie à rien de plus et coûte un coup. Pire, chaque
+        promesse arrive chez le partenaire comme une offre à laquelle répondre,
+        et chaque réponse en est une nouvelle : mesuré, deux coopérateurs alliés
+        s'envoyaient 6 à 7 promesses par tour et par dieu (208 par partie contre
+        80), et y perdaient un tiers de leur population. Le renouvellement reste
+        possible au dernier tour de l'engagement.
+        """
+        pledge = self._pledge(entry["target"])
+        if pledge is None or pledge == "none":
+            return False
+        partner = self._partner(entry["target"])
+        victim = self._victim(entry["target"])
+        return any(
+            item["partner"] == partner and item["kind"] == pledge
+            and (victim is None or item.get("victim", -1) == victim)
+            and item["breached_turn"] is None and item["expires_turn"] > view["turn"]
+            for item in view.get("commitments", [])
+        )
+
+    def _pact_bias(self, entry: dict, view: dict) -> float:
+        """Un pacte convenu d'avance : le sceller, et ne pas frapper ses membres."""
+        if not self.archetype.partners:
+            return 1.0
+        if self._pact_wanted(entry, view):
+            return 9.0
+        if self._partner(entry["target"]) in self.archetype.partners and any(
+            self._effect_key(effect) in ("war_desire", "embargo", "curse")
+            for effect in entry["spec"].effects
+        ):
+            return 0.02
+        return 1.0
 
     def _reciprocity_bias(self, entry: dict, view: dict) -> float:
         """Répondre à une main tendue, en promettant la même chose en retour.
@@ -240,7 +318,7 @@ class ScriptedPolicy(Policy):
         cible pour une alliance de guerre. Sinon l'engagement ne se forme pas.
         """
         pledge = self._pledge(entry["target"])
-        if pledge is None or pledge == "none":
+        if pledge is None or pledge == "none" or self._already_bound(entry, view):
             return False
         partner = self._partner(entry["target"])
         offered = {
@@ -338,6 +416,11 @@ class ScriptedPolicy(Policy):
         pledge = self._pledge(entry["target"])
         if pledge is None:
             return 1.0
+        if self.archetype.partners and self._pact_wanted(entry, view):
+            # Le pacte ne dépend pas de l'humeur diplomatique : `_pact_bias` décide.
+            return 1.0
+        if self._already_bound(entry, view):
+            return 0.01
         if pledge == "none":
             return max(0.05, 1.0 - self.archetype.proposing)
         # Une réponse relève de l'acceptation, une offre spontanée de la proposition.
@@ -406,6 +489,8 @@ class ScriptedPolicy(Policy):
 
         scores = [self._score(item, view) for item in real]
         chosen = self._sample(real, scores)
+        if self.archetype.partners and self._is_pact_move(chosen, view):
+            self._pact_offered[self._partner(chosen["target"])] = view["turn"]
         return action(chosen["index"])
 
     def _sample(self, options: list, scores: list[float]):

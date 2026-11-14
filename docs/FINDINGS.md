@@ -1097,3 +1097,51 @@ n'y suffit pas. Pistes pour T5 :
    (interruption du commerce, tension), pour que rester en dehors ne soit pas gratuit.
 3. **Rendre le palier de recherche visible** — l'invisibilité protège aujourd'hui
    exactement la stratégie qui n'a pas besoin de protection.
+
+### 22. L'alliance économique coûtait cher — deux bugs, et un commerce sans surplus
+
+Mesuré avec le laboratoire (`lab/`) : deux coopérateurs liés par une alliance
+économique perdaient **0,40 point de rang** par siège contre deux tortues. Deux
+bugs, et une propriété du jeu.
+
+1. **Écho diplomatique.** Chaque promesse d'un allié arrivait comme une offre à
+   laquelle répondre (bonus × 8 pour le coopérateur), et chaque réponse en était
+   une nouvelle pour l'autre. Deux alliés s'envoyaient 6 à 7 promesses par tour
+   et par dieu : **208 par partie** (80 pour le coopérateur seul, déjà). Corrigé :
+   on ne propose plus, et on ne répond plus, à un engagement déjà en vigueur avec
+   ce partenaire (renouvellement permis au dernier tour). Le coopérateur passe de
+   80 à 6,5 négociations par partie, et sa population finale de 146 à 169.
+2. **Transfert « garanti » jamais versé.** Le plancher de l'alliance remettait la
+   relation commerciale au seuil (0,50) en fin de résolution ; le tour suivant, le
+   commerce la faisait d'abord décroître (× 0,9 → 0,45) avant de la comparer au
+   seuil. Aucun échange pendant toute l'alliance, hors tour de signature. Corrigé :
+   le plancher s'applique après le déclin.
+
+Après correction, l'alliance fonctionne (15 échanges entre alliés par partie au
+lieu de 0,45) **et ne rapporte rien** : −0,02 à −0,05 point de rang. Le commerce
+ne fait que **transférer** — « chacun donne son abondance et reçoit son manque »,
+à ressources constantes. Sans surplus, ni la voie commerciale ni l'alliance
+économique ne peuvent battre la voie technologique : c'est un levier de T6.
+
+### 23. La guerre seule perd, la guerre à deux gagne : une chasse au cerf
+
+PSRO (oracle CMA-ES, table EGTA adaptative ; 4 exécutions, 2 graines, diplomatie
+libre et gelée) trouve un seul équilibre sur le panel : **100 % turtle**. Contre
+trois tortues, un conquérant seul fait 0,8 à 1,25 point de rang (1,5 = neutre).
+
+Tests de déviation à deux (même carte, mêmes adversaires, avec et sans pacte
+convenu d'avance), contre trois tortues :
+
+| Paire | Pacte | Gain de la paire |
+|---|---|---|
+| 2 tortues | quelconque | ≈ 0 |
+| 2 conquérants | non-agression | **+0,86** ± 0,04 (1,34 → 2,20) |
+| 2 conquérants | alliance de guerre contre le leader | **+1,07** ± 0,04 (1,29 → 2,36) |
+| 2 coopérateurs | alliance économique | −0,05 ± 0,02 |
+
+Le leader est battable — mais seulement à deux. C'est la réponse partielle au
+constat n° 18 : punir le leader perd quand on y va seul ou à l'aveugle, et paie
+quand deux agresseurs ne se frappent pas entre eux. Pour un benchmark de LLM,
+c'est plutôt une bonne nouvelle : former la coalition devient une compétence qui
+rapporte. L'oracle de PSRO, qui cherche une stratégie SEULE contre l'équilibre,
+ne pouvait pas la voir ; d'où l'oracle « équipe » (deux sièges) de `lab/psro.py`.
