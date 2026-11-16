@@ -36,6 +36,8 @@ from lab.metagame import SEATS, PayoffTable
 from lab.report import NEUTRAL, final_sigma, load_state
 from lab.runner import Runner
 
+THIN = 12   # en dessous, une case à deux stratégies est trop bruitée (±0,3 et plus)
+
 
 # ── départs multiples ───────────────────────────────────────────────────────
 
@@ -135,6 +137,13 @@ def render(state: dict, starts: int, alphas: list[float]) -> str:
     lines += ["", "  α-Rank :"]
     for alpha in alphas:
         lines.append(f"    α = {alpha:<5g} {mix(alpha_rank(table, k, alpha))}")
+    thin = [(profile, i) for profile, i in table.two_strategy_cells(k)
+            if table.count(profile, i) < THIN]
+    if thin:
+        profile, i = thin[0]
+        lines += ["", f"  attention : {len(thin)} cases à deux stratégies jouées moins de "
+                      f"{THIN} fois (ex. {labels[i]} dans {[labels[j] for j in profile]}) — "
+                      f"les équilibres purs et α-Rank qui en dépendent sont fragiles"]
     return "\n".join(lines)
 
 

@@ -110,3 +110,9 @@ def test_relevant_cells_include_team_cells_on_request():
     cells = table.relevant(np.array([1.0, 0.0]), p_min=0.01, team=True)
     assert ((0, 0, 1, 1), 1) in cells
     assert ((0, 0, 1, 1), 1) not in table.relevant(np.array([1.0, 0.0]), p_min=0.01)
+
+
+def test_two_strategy_cells_cover_every_pair():
+    cells = PayoffTable.two_strategy_cells(3)
+    assert len(cells) == 3 * 3 * 2          # 3 paires × 3 profils × 2 stratégies
+    assert ((0, 2, 2, 2), 0) in cells and ((0, 0, 0, 2), 2) in cells

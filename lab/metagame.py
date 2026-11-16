@@ -155,6 +155,24 @@ class PayoffTable:
                     out.extend((tuple(sorted((i, i, *duo))), i) for i in range(k))
         return sorted(set(out))
 
+    @staticmethod
+    def two_strategy_cells(k: int) -> list[tuple[tuple[int, ...], int]]:
+        """Les cases où deux stratégies seulement se rencontrent : (i,i,i,j),
+        (i,i,j,j), (i,j,j,j), pour chacune des deux.
+
+        Ce sont les cases d'α-Rank (un mutant envahit-il une population ?) et
+        celles qui décident si un équilibre PUR tient. Le raffinement guidé par σ
+        les néglige dès que σ s'en éloigne — mesuré : « eq1 seul contre 3
+        turtles » jouée 4 fois, lue à 1,0 au lieu de 1,66, et un faux équilibre
+        « 100 % turtle » est apparu. K(K − 1)/2 × 3 profils seulement.
+        """
+        out = []
+        for i in range(k):
+            for j in range(i + 1, k):
+                for profile in ((i, i, i, j), (i, i, j, j), (i, j, j, j)):
+                    out += [(profile, i), (profile, j)]
+        return out
+
     def team_fitness(self, x) -> np.ndarray:
         """Gain moyen par siège d'une ÉQUIPE de deux copies de i, face à deux
         adversaires tirés selon x.

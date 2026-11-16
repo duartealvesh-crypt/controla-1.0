@@ -15,10 +15,10 @@ on:
         default: '["libre", "gelee"]'
       seeds:
         description: "Graines PSRO (JSON) : une exécution par variante et par graine"
-        default: "[0, 1]"
+        default: "[0, 1, 2, 3]"
       iterations:
-        description: "Itérations PSRO au plus"
-        default: "8"
+        description: "Itérations PSRO au plus (≈ 70 min chacune ; arrêt avant si convergence)"
+        default: "4"
       extra:
         description: "Options en plus pour lab.psro (ex. --generations 8 --refine-target 48)"
         default: ""

@@ -70,9 +70,13 @@ class Settings:
         self.refine_pmin = 0.03     # probabilité minimale du trio pour peser
         self.refine_rounds = 3      # allers-retours σ → précision → σ
         self.popsize = 0            # 0 → défaut de CMA-ES (4 + 3 ln d)
-        self.generations = 15
-        self.scenarios = 24         # parties par candidat et par génération
-        self.starts = 2             # points de départ de l'oracle (les mieux placés)
+        self.duel_target = 16       # sièges visés dans chaque case à deux stratégies
+        self.generations = 12
+        self.scenarios = 20         # parties par candidat et par génération
+        self.starts = 1             # départs : les mieux placés selon le critère de
+                                    #   l'oracle, + le meilleur selon l'autre critère
+        self.random_starts = 1      # départs tirés au hasard, à pas plus large
+        self.random_sigma0 = 1.5
         self.screen_games = 64      # présélection entre les départs
         self.team = True            # oracle « équipe » : 2 copies contre σ
         self.eval_games = 128
@@ -110,10 +114,13 @@ def fill_table(runner: Runner, table: PayoffTable, population: list[dict], s: Se
 
 
 def refine(runner, table: PayoffTable, population, sigma, s: Settings, rng) -> int:
-    """Complète les cases qui pèsent sous σ jusqu'à `refine_target` sièges."""
+    """Complète les cases qui pèsent sous σ jusqu'à `refine_target` sièges, et
+    les cases à deux stratégies jusqu'à `duel_target`."""
     needed: dict[tuple, int] = {}
-    for profile, i in table.relevant(sigma, s.refine_pmin, team=s.team):
-        missing = s.refine_target - table.count(profile, i)
+    cells = [(cell, s.refine_target) for cell in table.relevant(sigma, s.refine_pmin, team=s.team)]
+    cells += [(cell, s.duel_target) for cell in table.two_strategy_cells(len(population))]
+    for (profile, i), target in cells:
+        missing = target - table.count(profile, i)
         if missing > 0:
             per_game = profile.count(i)       # sièges de i gagnés par partie
             needed[profile] = max(needed.get(profile, 0), -(-missing // per_game))
@@ -185,14 +192,14 @@ CMA_NOISY = {"tolflatfitness": 10**9, "tolfun": 0, "tolfunhist": 0, "tolx": 0,
              "tolstagnation": 10**9}
 
 
-def best_response(runner, space: Space, population, sigma, start: dict, s: Settings,
+def best_response(runner, space: Space, population, sigma, x0, sigma0: float, s: Settings,
                   rng, label: str, log, copies: int = 1) -> dict:
     import cma
 
     options = {"bounds": [-CLIP, CLIP], "maxiter": s.generations, "seed": _seed(rng),
                "verbose": -9, **CMA_NOISY}
     options["popsize"] = s.popsize or 4 + int(3 * math.log(space.dim))
-    es = cma.CMAEvolutionStrategy(space.encode(start), s.sigma0, options)
+    es = cma.CMAEvolutionStrategy(list(x0), sigma0, options)
     for generation in range(1, s.generations + 1):
         cases = scenarios(rng, sigma, s.scenarios, copies)
         xs = es.ask()
@@ -229,17 +236,41 @@ def record_cases(table: PayoffTable, index: int, games) -> None:
                      points)
 
 
+def starting_points(space: Space, population, reference, other, s: Settings, rng) -> list:
+    """(nom, vecteur, pas initial) des départs de l'oracle.
+
+    CMA-ES est une recherche LOCALE : il trouve ce qui est proche du départ. Les
+    `starts` stratégies les mieux placées selon le critère de l'oracle ne
+    suffisent pas — mesuré : la stratégie eq1, qui bat 3 turtles même seule,
+    a échappé 8 fois sur 8 à l'oracle solo parti de turtle et d'expansionist ;
+    l'oracle équipe l'a trouvée en partant de conqueror, médiocre seul mais bon
+    à deux. D'où le meilleur selon l'AUTRE critère, et un départ au hasard à pas
+    plus large pour sortir des bassins connus.
+    """
+    order = [int(i) for i in np.argsort(-np.asarray(reference))[: s.starts]]
+    if other is not None:
+        best_other = int(np.argmax(other))
+        if best_other not in order:
+            order.append(best_other)
+    points = [(population[i]["label"], space.encode(population[i]["params"]), s.sigma0)
+              for i in order]
+    for n in range(s.random_starts):
+        x0 = np.clip(rng.normal(0.0, 1.0, space.dim), -CLIP, CLIP)
+        points.append((f"hasard {n + 1}", list(x0), s.random_sigma0))
+    return points
+
+
 def oracle(runner, space: Space, population, sigma, reference, s: Settings, rng,
-           label: str, log, copies: int):
-    """Meilleure réponse cherchée depuis les `starts` stratégies les mieux placées
-    selon `reference` ; présélection sur `screen_games` parties, puis mesure
-    finale sur des parties FRAÎCHES — la présélection favorise les chanceux, on
-    ne réutilise donc pas ses chiffres."""
+           label: str, log, copies: int, other=None):
+    """Meilleure réponse cherchée depuis plusieurs départs (`starting_points`) ;
+    présélection sur `screen_games` parties, puis mesure finale sur des parties
+    FRAÎCHES — la présélection favorise les chanceux, on ne réutilise donc pas
+    ses chiffres."""
     kind = "équipe de 2" if copies == 2 else "solo"
     found = []
-    for i in np.argsort(-np.asarray(reference))[: s.starts]:
-        log(f"  oracle {kind} : CMA-ES depuis {population[i]['label']}")
-        found.append(best_response(runner, space, population, sigma, population[i]["params"],
+    for name, x0, sigma0 in starting_points(space, population, reference, other, s, rng):
+        log(f"  oracle {kind} : CMA-ES depuis {name}")
+        found.append(best_response(runner, space, population, sigma, x0, sigma0,
                                    s, rng, label, log, copies))
     best = found[0]
     if len(found) > 1:
@@ -295,9 +326,14 @@ def run(name: str, space: Space, s: Settings, workers=None, log=print) -> dict:
                       "sigma": labels(sigma), "fitness": labels(fitness),
                       "regret": float(regret)}
             new = []
+            team = table.team_fitness(sigma) if s.team else None
+            if team is not None:
+                log(f"  valeur d'équipe (2 copies contre σ) : "
+                    + ", ".join(f"{population[i]['label']} {team[i]:.2f}"
+                                for i in np.argsort(-team)[:4]))
 
             br, mean, se, games = oracle(runner, space, population, sigma, fitness, s, rng,
-                                         f"br{it}", log, copies=1)
+                                         f"br{it}", log, copies=1, other=team)
             gain = float(mean - NEUTRAL)
             accepted = bool(gain > max(s.threshold, 2 * se))
             log(f"  meilleure réponse solo : gain {gain:+.3f} ± {se:.3f} contre σ "
@@ -307,14 +343,10 @@ def run(name: str, space: Space, s: Settings, workers=None, log=print) -> dict:
             if accepted:
                 new.append((f"br{it}", br, games, f"oracle solo {it}"))
 
-            if s.team:
-                team = table.team_fitness(sigma)
+            if team is not None:
                 best_team = int(np.argmax(team))
-                log(f"  valeur d'équipe (2 copies contre σ) : "
-                    + ", ".join(f"{population[i]['label']} {team[i]:.2f}"
-                                for i in np.argsort(-team)[:4]))
                 eq, tmean, tse, tgames = oracle(runner, space, population, sigma, team, s, rng,
-                                                f"eq{it}", log, copies=2)
+                                                f"eq{it}", log, copies=2, other=fitness)
                 tgain = float(tmean - team[best_team])
                 taccepted = bool(tgain > max(s.threshold, 2 * tse))
                 log(f"  meilleure équipe : {tmean:.3f} ± {tse:.3f} par siège, soit "
@@ -358,7 +390,7 @@ def _sigma_line(population, sigma, fitness) -> str:
 # ── ligne de commande ───────────────────────────────────────────────────────
 
 SMOKE = dict(iterations=2, base_games=4, refine_target=6, popsize=6, generations=2,
-             scenarios=4, eval_games=8, starts=2, screen_games=4,
+             scenarios=4, eval_games=8, starts=1, screen_games=4, duel_target=4,
              panel=["cooperator", "conqueror", "turtle"])
 
 
@@ -376,7 +408,9 @@ def main(argv=None) -> int:
     parser.add_argument("--scenarios", type=int)
     parser.add_argument("--eval-games", type=int)
     parser.add_argument("--threshold", type=float)
-    parser.add_argument("--starts", type=int, help="points de départ de l'oracle")
+    parser.add_argument("--starts", type=int, help="départs les mieux placés de l'oracle")
+    parser.add_argument("--random-starts", type=int, help="départs tirés au hasard")
+    parser.add_argument("--duel-target", type=int, help="sièges par case à deux stratégies")
     parser.add_argument("--screen-games", type=int)
     parser.add_argument("--no-team", action="store_true", help="sans oracle « équipe »")
     parser.add_argument("--seed", type=int)
@@ -387,7 +421,7 @@ def main(argv=None) -> int:
 
     values = {key: getattr(args, key) for key in (
         "iterations", "base_games", "refine_target", "refine_pmin", "popsize", "generations", "scenarios", "eval_games",
-        "threshold", "seed", "starts", "screen_games")}
+        "threshold", "seed", "starts", "screen_games", "random_starts", "duel_target")}
     if args.no_team:
         values["team"] = False
     if args.smoke:

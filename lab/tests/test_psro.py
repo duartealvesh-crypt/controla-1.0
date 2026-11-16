@@ -31,7 +31,7 @@ def test_base_fill_covers_every_profile_with_rotations():
 
 def test_refine_tops_up_only_the_cells_that_weigh_under_sigma():
     table, runner = PayoffTable(), FakeRunner()
-    s = Settings(base_games=4, refine_target=20, refine_pmin=0.5)
+    s = Settings(base_games=4, refine_target=20, refine_pmin=0.5, duel_target=4)
     rng = np.random.default_rng(0)
     fill_table(runner, table, POPULATION, s, rng)
     refine(runner, table, POPULATION, np.array([1.0, 0.0, 0.0]), s, rng)
@@ -92,7 +92,8 @@ def test_the_loop_adds_solo_and_team_responses(monkeypatch, tmp_path):
         def __exit__(self, *exc):
             return None
 
-    def fake_oracle(runner, space, population, sigma, reference, s, rng, label, log, copies):
+    def fake_oracle(runner, space, population, sigma, reference, s, rng, label, log, copies,
+                    other=None):
         cases = psro.scenarios(rng, sigma, 4, copies)
         games = list(zip(cases, [[3, 2, 1, 0]] * len(cases)))
         return dict(population[0]["params"], name=label), 2.9, 0.01, games
@@ -100,10 +101,37 @@ def test_the_loop_adds_solo_and_team_responses(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(psro, "Runner", Pool)
     monkeypatch.setattr(psro, "oracle", fake_oracle)
-    settings = psro.Settings(iterations=2, panel=["turtle", "conqueror"], refine_target=4)
+    settings = psro.Settings(iterations=2, panel=["turtle", "conqueror"], refine_target=4,
+                             duel_target=4)
     state = psro.run("t", Space(), settings, log=lambda line: None)
     assert [p["label"] for p in state["population"]] == [
         "turtle", "conqueror", "br1", "eq1", "br2", "eq2"]
     assert state["status"] == "max_iterations"
     assert state["iterations"][0]["accepted"] is True
     assert state["iterations"][0]["team_accepted"] is True
+
+
+def test_refine_also_tops_up_the_two_strategy_cells():
+    table, runner = PayoffTable(), FakeRunner()
+    s = Settings(base_games=4, refine_target=4, refine_pmin=0.5, duel_target=12)
+    rng = np.random.default_rng(0)
+    fill_table(runner, table, POPULATION, s, rng)
+    refine(runner, table, POPULATION, np.array([1.0, 0.0, 0.0]), s, rng)
+    # « 2 seul contre trois 1 » : loin de σ, mais décide si « 100 % 1 » tient.
+    assert table.count((1, 1, 1, 2), 2) >= 12
+    assert table.count((1, 1, 2, 2), 1) >= 12
+    assert table.count((0, 1, 1, 2), 2) == 4           # trois stratégies : intacte
+
+
+def test_starting_points_add_the_other_criterion_and_a_random_start():
+    from lab.psro import starting_points
+    from lab.strategy import Space
+
+    from controla import api
+    population = [{"label": n, "params": api.archetype_params(n)}
+                  for n in ("turtle", "conqueror", "cooperator")]
+    s = Settings(starts=1, random_starts=1)
+    points = starting_points(Space(), population, reference=[1.5, 1.1, 0.8],
+                             other=[1.5, 1.6, 1.0], s=s, rng=np.random.default_rng(0))
+    assert [name for name, _, _ in points] == ["turtle", "conqueror", "hasard 1"]
+    assert points[2][2] == s.random_sigma0
